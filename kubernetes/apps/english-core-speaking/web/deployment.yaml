@@ -1,0 +1,43 @@
+# See the note in ../api/deployment.yaml -- :latest is real by bootstrap
+# time only if main has been pushed at least once first; same caveat here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cleanbrain-me-english-core-speaking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: web
+          image: ghcr.io/cleanbrain-developer/english-core-speaking-web:latest
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi

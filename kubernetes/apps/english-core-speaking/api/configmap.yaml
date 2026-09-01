@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: cleanbrain-me-english-core-speaking
+data:
+  NODE_ENV: production
+  TZ: Asia/Seoul

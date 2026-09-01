@@ -1,0 +1,3 @@
+# Real secret files derived from *.example.yaml templates -- never commit these.
+secret.yaml
+**/secret.yaml
