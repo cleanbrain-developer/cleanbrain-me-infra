@@ -15,8 +15,6 @@ spec:
       labels:
         app: web
     spec:
-      imagePullSecrets:
-        - name: ghcr-pull
       containers:
         - name: web
           image: ghcr.io/cleanbrain-developer/english-core-speaking-web:latest

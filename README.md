@@ -429,9 +429,23 @@ The configured application value must exactly match the authorized redirect URI.
 
 # GHCR image pull authentication
 
-If the GHCR packages are private, Kubernetes requires a registry pull secret.
+Current policy: both GHCR packages are **public**.
 
-Create it once in the application namespace:
+```text
+ghcr.io/cleanbrain-developer/english-core-speaking-api
+ghcr.io/cleanbrain-developer/english-core-speaking-web
+```
+
+K3s pulls them anonymously -- no registry credential, no Kubernetes Secret, and no
+`imagePullSecrets` entry on either Deployment. This was confirmed directly from the
+`ImagePullBackOff` Kubernetes event seen during first bootstrap (`failed to authorize:
+... 403 Forbidden`), which was caused by a stale `imagePullSecrets: [{name: ghcr-pull}]`
+reference pointing at a Secret that was never created for packages that don't need one
+in the first place -- not by the packages actually being private.
+
+**If a package is ever switched back to private**, anonymous pulls will start failing
+with the same `403 Forbidden` shape, and both a pull Secret and an `imagePullSecrets`
+reference need to come back:
 
 ```bash
 kubectl -n cleanbrain-me-english-core-speaking \
@@ -441,14 +455,14 @@ kubectl -n cleanbrain-me-english-core-speaking \
   --docker-password=<credential-with-read-packages>
 ```
 
-Both application Deployments reference:
-
-```text
+```yaml
 imagePullSecrets:
   - name: ghcr-pull
 ```
 
-If the packages are later made public, this Secret can be removed along with the corresponding Deployment references.
+added back under each Deployment's `spec.template.spec`. Until that happens, don't add
+either -- an `imagePullSecrets` entry naming a Secret that doesn't exist blocks pulls
+outright, public image or not.
 
 ---
 
@@ -483,19 +497,10 @@ kubectl apply -f \
 
 This creates the limited `ci-deployer` identity used only for subsequent API/Web image rollouts.
 
-## 3. GHCR pull secret
+Both GHCR packages are public, so there's no pull secret to create here -- see "GHCR
+image pull authentication" above if that ever changes.
 
-If GHCR is private:
-
-```bash
-kubectl -n cleanbrain-me-english-core-speaking \
-  create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io \
-  --docker-username=<github-username> \
-  --docker-password=<credential-with-read-packages>
-```
-
-## 4. Application Secret
+## 3. Application Secret
 
 ```bash
 cp \
@@ -520,7 +525,7 @@ kubectl apply -f \
 
 Never commit this file.
 
-## 5. PostgreSQL
+## 4. PostgreSQL
 
 ```bash
 kubectl apply -f \
@@ -538,7 +543,7 @@ kubectl -n cleanbrain-me-english-core-speaking \
   --timeout=120s
 ```
 
-## 6. API
+## 5. API
 
 ```bash
 kubectl apply -f \
@@ -555,7 +560,7 @@ kubectl -n cleanbrain-me-english-core-speaking \
 
 The current API image applies the application's Prisma migrations and initialization logic during startup.
 
-## 7. Web
+## 6. Web
 
 ```bash
 kubectl apply -f \
@@ -570,7 +575,7 @@ kubectl -n cleanbrain-me-english-core-speaking \
   --timeout=120s
 ```
 
-## 8. HTTPRoute
+## 7. HTTPRoute
 
 ```bash
 kubectl apply -f \
