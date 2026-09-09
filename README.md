@@ -200,9 +200,77 @@ TLS Secret Namespace:
 ```
 
 This would be the first certificate for the bare apex domain rather than a
-subdomain. Confirm with the cluster administrator whether the existing
-HTTP-01/ClusterIssuer setup issues this the same way as the subdomain certs
-above, before applying `kubernetes/apps/entrance/httproute.yaml`.
+subdomain. Given "ACME HTTP-01 implementation" below (per-hostname
+`Certificate` objects driving a Traefik Ingress HTTP-01 solver, not a
+Gateway-API-native cert-manager integration), the existing two TLS Secrets
+were most likely produced by a `cert-manager.io/v1` `Certificate` object
+per hostname rather than anything automatic tied to the Gateway. Before
+applying `kubernetes/apps/entrance/httproute.yaml`, as cluster administrator:
+
+1. Inspect what actually produced the existing certs, to confirm the
+   pattern instead of assuming it:
+
+   ```bash
+   kubectl get certificate -n cleanbrain-me-system
+   kubectl get certificate -n cleanbrain-me-system \
+     -o yaml <existing-english-core-speaking-or-kioti-cert-name>
+   kubectl get gateway cleanbrain-me-gateway -n cleanbrain-me-system -o yaml
+   ```
+
+   The Gateway output matters specifically for its HTTPS listener's
+   `tls.certificateRefs`: if it's a single-secret-per-listener design, a
+   new listener is needed for `cleanbrain.me`; if one listener already
+   lists multiple `certificateRefs` (SNI-multiplexed), the new secret only
+   needs to be appended to that list. This repository has no tracked
+   Gateway manifest to check against -- it must be read from the live
+   cluster.
+
+2. Request the certificate, mirroring the existing `Certificate` object's
+   `issuerRef`/spec shape found in step 1 (adjust below if it differs):
+
+   ```bash
+   cat <<'EOF' | kubectl apply -f -
+   apiVersion: cert-manager.io/v1
+   kind: Certificate
+   metadata:
+     name: cleanbrain-me-entrance
+     namespace: cleanbrain-me-system
+   spec:
+     secretName: cleanbrain-me-entrance-tls
+     issuerRef:
+       name: cleanbrain-me-letsencrypt-prod
+       kind: ClusterIssuer
+     dnsNames:
+       - cleanbrain.me
+   EOF
+
+   kubectl get certificate cleanbrain-me-entrance \
+     -n cleanbrain-me-system -w
+   ```
+
+   Wait for `READY: True` before proceeding -- HTTP-01 issuance requires
+   the apex A record to already resolve to this server, which is confirmed
+   (see "DNS" above).
+
+3. If step 1 showed the Gateway needs a new listener (rather than an
+   append to an existing `certificateRefs` list), add one for
+   `cleanbrain.me` referencing `cleanbrain-me-entrance-tls`, matching the
+   existing listeners' `port`/`protocol`/`allowedRoutes` shape. This file
+   is not tracked in this repository (see "Networking" > "Gateway" above),
+   so this is a direct `kubectl edit`/`kubectl apply` against the live
+   Gateway object, not a change to a manifest here.
+
+4. Once the Secret exists and the Gateway can serve it, apply
+   `kubernetes/apps/entrance/httproute.yaml` and verify with `curl -I
+   https://cleanbrain.me`.
+
+This runbook is inferred from this repository's documented pattern, not
+independently verified against the live cluster -- correct it once step 1's
+actual output is known, and consider committing a tracked `Certificate`
+manifest afterward if that turns out to be this repo's actual mechanism
+(unlike the Gateway/ClusterIssuer, a per-app `Certificate` object plausibly
+belongs alongside each app's other manifests rather than as unmanaged
+cluster bootstrap).
 
 Both existing certificates are issued the same way, per-hostname via HTTP-01 -- no
 wildcard certificate (which would require a DNS-01 solver and a Cloudflare
@@ -260,7 +328,7 @@ english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 ```
 
-`cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain -- **unverified**: whether an A record already exists for the apex (separate from any NS/registrar-level records) and points at the Hetzner public IP has not been confirmed in this repository. Check this in Cloudflare DNS before relying on `kubernetes/apps/entrance/httproute.yaml`.
+`cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain. An A record for the apex, pointing at the Hetzner public IP, already exists (confirmed 2026-09-09) -- unlike the TLS certificate for that hostname, DNS is not a blocker for this service (see "TLS" above for the remaining open item).
 
 `kioti.cleanbrain.me` is a dedicated subdomain namespace for KIOTI-related
 test/demo services (see "Naming conventions" below), covered by a single
@@ -488,14 +556,13 @@ first, so `deployment.yaml`'s `:latest` tag exists in GHCR before bootstrap
 has already been done; the first Actions run (`test` + `build-and-push`)
 succeeded.
 
-**Before running the steps below**, resolve the two open items flagged in
-`kubernetes/apps/entrance/httproute.yaml` and the "TLS" / "DNS" sections
-above: whether an A record exists for the bare `cleanbrain.me` apex, and
-whether a TLS Secret (`cleanbrain-me-entrance-tls`) needs to be issued for
-it. This app's `httproute.yaml` is the first one in this repository to
-target the apex domain instead of a subdomain, so nothing here confirms the
-existing Gateway/cert-manager setup covers it without checking the live
-cluster.
+DNS is confirmed (see "DNS" above). **Before running the steps below**,
+complete the TLS runbook in "TLS" above -- `cleanbrain-me-entrance-tls`
+must exist in `cleanbrain-me-system` and the Gateway must be able to serve
+it, or the last `httproute.yaml` step below will apply cleanly but HTTPS
+for `cleanbrain.me` won't actually work yet.
+
+## 1. Namespace, RBAC, Deployment, Service, HTTPRoute
 
 ```bash
 kubectl apply -f \
@@ -518,18 +585,97 @@ kubectl apply -f \
   kubernetes/apps/entrance/httproute.yaml
 ```
 
-Both GHCR image pull packages so far (`english-core-speaking`'s) are
-public; `cleanbrain-me-entrance`'s repository is also public, so its GHCR
-package is expected to default to public too, but this has not been
-explicitly confirmed against the package's actual visibility setting -- see
-"GHCR image pull authentication" below. If it turns out to default to
-private, add a pull secret and `imagePullSecrets` entry the same way
-`kioti-crm-discount`'s Deployment does before applying `deployment.yaml`.
+The GHCR package is public (see "GHCR image pull authentication" below), so
+no pull secret is needed here, matching `english-core-speaking`.
 
-Verify the same way as `english-core-speaking` ("Deployment verification"
-below), substituting the namespace and hostname; there is no `/api/health`
-endpoint for this app, so the external check is just `curl -I
-https://cleanbrain.me` and a browser load of the page.
+## 2. CI ServiceAccount token and deploy-host kubeconfig
+
+This is the third application sharing `/home/deploy/.kube/config` -- follow
+"Multi-application kubeconfig on the deploy host" below, not the single-app
+numbered steps 1-12 literally (those would overwrite the existing file).
+Substituting this app's values from that section's table:
+
+```bash
+export DEPLOY_NAMESPACE="cleanbrain-me-entrance"
+export DEPLOY_SERVICE_ACCOUNT="ci-deployer"
+export DEPLOY_TOKEN_SECRET="ci-deployer-cleanbrain-me-entrance-token"
+
+kubectl get serviceaccount "$DEPLOY_SERVICE_ACCOUNT" -n "$DEPLOY_NAMESPACE"
+
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${DEPLOY_TOKEN_SECRET}
+  namespace: ${DEPLOY_NAMESPACE}
+  annotations:
+    kubernetes.io/service-account.name: ${DEPLOY_SERVICE_ACCOUNT}
+type: kubernetes.io/service-account-token
+EOF
+
+for i in $(seq 1 30); do
+  TOKEN_B64="$(kubectl get secret "$DEPLOY_TOKEN_SECRET" -n "$DEPLOY_NAMESPACE" -o jsonpath='{.data.token}' 2>/dev/null || true)"
+  CA_B64="$(kubectl get secret "$DEPLOY_TOKEN_SECRET" -n "$DEPLOY_NAMESPACE" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)"
+  [ -n "$TOKEN_B64" ] && [ -n "$CA_B64" ] && break
+  sleep 1
+done
+[ -z "$TOKEN_B64" ] || [ -z "$CA_B64" ] && { echo "ServiceAccount token was not populated"; exit 1; }
+
+DEPLOY_TOKEN="$(printf '%s' "$TOKEN_B64" | base64 -d)"
+CA_TMP="$(mktemp)"
+printf '%s' "$CA_B64" | base64 -d > "$CA_TMP"
+
+# Merges into the EXISTING /home/deploy/.kube/config (run as the deploy
+# user, or install with the same ownership afterward) -- does NOT touch
+# the cleanbrain-me-k3s cluster entry or current-context, per "Multi-
+# application kubeconfig on the deploy host" below.
+KUBECONFIG_PATH=/home/deploy/.kube/config
+
+kubectl config set-credentials ci-deployer-cleanbrain-me-entrance \
+  --token="$DEPLOY_TOKEN" \
+  --kubeconfig="$KUBECONFIG_PATH"
+
+kubectl config set-context ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s \
+  --cluster=cleanbrain-me-k3s \
+  --user=ci-deployer-cleanbrain-me-entrance \
+  --namespace="$DEPLOY_NAMESPACE" \
+  --kubeconfig="$KUBECONFIG_PATH"
+
+rm -f "$CA_TMP"
+unset DEPLOY_TOKEN TOKEN_B64 CA_B64
+```
+
+Verify (per steps 7-10 below, with `--context` added):
+
+```bash
+sudo -u deploy -H env KUBECONFIG=/home/deploy/.kube/config \
+  kubectl auth whoami --context=ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s
+# expect: system:serviceaccount:cleanbrain-me-entrance:ci-deployer
+
+sudo -u deploy -H env KUBECONFIG=/home/deploy/.kube/config \
+  kubectl auth can-i patch deployment/web -n cleanbrain-me-entrance \
+  --context=ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s
+# expect: yes
+
+sudo -u deploy -H env KUBECONFIG=/home/deploy/.kube/config \
+  kubectl auth can-i get secrets -n cleanbrain-me-entrance \
+  --context=ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s
+# expect: no
+```
+
+## 3. Enable CI deploys
+
+Once the above is verified, set `ENABLE_PRODUCTION_DEPLOY=true` as a
+repository variable on `cleanbrain-me-entrance` (Settings -> Secrets and
+variables -> Actions -> Variables) and push (or re-run) to trigger a real
+deploy through the workflow, confirming `kubectl set image` /
+`kubectl rollout status` succeed end to end (step 12 below).
+
+Verify the deployed service the same way as `english-core-speaking`
+("Deployment verification" below), substituting the namespace and
+hostname; there is no `/api/health` endpoint for this app, so the external
+check is just `curl -I https://cleanbrain.me` and a browser load of the
+page.
 
 ---
 
@@ -774,21 +920,20 @@ reference need to come back (same as the kioti-crm-discount procedure directly b
 Until that happens, don't add either -- an `imagePullSecrets` entry naming a Secret
 that doesn't exist blocks pulls outright, public image or not.
 
-## cleanbrain-me-entrance: expected public, unconfirmed
+## cleanbrain-me-entrance: public packages
+
+Current policy: the GHCR package is **public** (confirmed 2026-09-09).
 
 ```text
 ghcr.io/cleanbrain-developer/cleanbrain-me-entrance
 ```
 
-`cleanbrain-me-entrance`'s source repository is public, like `english-core-speaking`'s,
-so its GHCR package is expected to default to public and pull anonymously the same way --
-`kubernetes/apps/entrance/deployment.yaml` accordingly has no `imagePullSecrets` entry.
-This has **not** been explicitly confirmed against the package's actual visibility
-setting in GitHub (checking it required a broader token scope than was available when
-this was written). Confirm the package's visibility before or during first-time
-deployment; if it turns out to default to private, add a pull secret and
-`imagePullSecrets` entry the same way `kioti-crm-discount` does directly below, scoped to
-the `cleanbrain-me-entrance` namespace.
+Same as `english-core-speaking`: K3s pulls it anonymously, no registry
+credential, no Kubernetes Secret, and no `imagePullSecrets` entry on the
+Deployment. `kubernetes/apps/entrance/deployment.yaml` reflects this. If
+this package is ever switched back to private, both a pull Secret and an
+`imagePullSecrets` reference need to be added, the same as
+`kioti-crm-discount` directly below.
 
 ## kioti-crm-discount: private package
 

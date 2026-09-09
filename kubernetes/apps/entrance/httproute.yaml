@@ -2,17 +2,17 @@
 # as english-core-speaking's httproute.yaml. Does NOT create the Gateway,
 # cert-manager, or ClusterIssuer.
 #
-# UNVERIFIED: unlike every other app so far, this route's hostname is the
-# bare root domain (cleanbrain.me), not a *.cleanbrain.me subdomain. Every
-# existing TLS Secret (see README.md "TLS") was issued per-hostname via
-# HTTP-01 for a subdomain; none currently covers the bare apex domain. This
-# manifest assumes a TLS Secret for the bare "cleanbrain.me" hostname will
-# exist in cleanbrain-me-system (named cleanbrain-me-entrance-tls, following
-# the existing <app>-tls naming convention) before this HTTPRoute is applied
-# -- confirm with the cluster administrator whether the existing Gateway
-# listener/cert-manager setup already covers this, or whether a new
-# Certificate/HTTP-01 issuance needs to be requested for the apex domain
-# first. Do not apply this file until that is confirmed.
+# UNVERIFIED (TLS only -- DNS is confirmed, see README.md "DNS"): unlike
+# every other app so far, this route's hostname is the bare root domain
+# (cleanbrain.me), not a *.cleanbrain.me subdomain. Every existing TLS
+# Secret was issued per-hostname via HTTP-01 for a subdomain; none
+# currently covers the bare apex domain, and a Secret named
+# cleanbrain-me-entrance-tls must exist in cleanbrain-me-system before this
+# HTTPRoute is meaningfully applied (the route itself will apply fine
+# either way, but the Gateway can't terminate TLS for this hostname without
+# it). See README.md "TLS" for the diagnostic/issuance runbook -- do not
+# apply this file until that Secret exists and the Gateway listener
+# references it.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
