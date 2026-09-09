@@ -6,9 +6,10 @@ This repository owns the Kubernetes manifests and deployment documentation for s
 
 Application source code lives in separate repositories and is not mixed into this repository.
 
-Current application repository:
+Current application repositories:
 
 - [`english-core-speaking`](https://github.com/cleanbrain-developer/english-core-speaking)
+- [`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private repository)
 
 ---
 
@@ -171,7 +172,26 @@ TLS Secret Namespace:
   cleanbrain-me-system
 ```
 
-The production certificate is already issued successfully.
+For `kioti-crm-discount`:
+
+```text
+Hostname:
+  crm-discount.kioti.cleanbrain.me
+
+TLS Secret:
+  cleanbrain-me-kioti-crm-discount-tls
+
+TLS Secret Namespace:
+  cleanbrain-me-system
+```
+
+Both certificates are issued the same way, per-hostname via HTTP-01 -- no
+wildcard certificate (which would require a DNS-01 solver and a Cloudflare
+API token) has been introduced. See "Naming conventions" below for how
+`kioti.cleanbrain.me` is used as a namespace for multiple future services
+without adding that complexity.
+
+The production certificates are already issued successfully.
 
 ### ACME HTTP-01 implementation
 
@@ -214,13 +234,23 @@ Cloudflare
 Hetzner public IP
 ```
 
-Current application hostname:
+Current application hostnames:
 
 ```text
 english-core-speaking.cleanbrain.me
+crm-discount.kioti.cleanbrain.me
 ```
 
-The DNS record ultimately resolves directly to the Hetzner VM.
+`kioti.cleanbrain.me` is a dedicated subdomain namespace for KIOTI-related
+test/demo services (see "Naming conventions" below), covered by a single
+wildcard DNS record so that adding another `kioti-*` service later needs no
+further DNS changes:
+
+```text
+*.kioti.cleanbrain.me   A   <Hetzner public IP>   (Proxy: DNS Only)
+```
+
+All records ultimately resolve directly to the Hetzner VM.
 
 ---
 
@@ -253,6 +283,7 @@ Preferred:
 web
 api
 postgres
+app
 ```
 
 Avoid redundant names such as:
@@ -263,6 +294,25 @@ cleanbrain-me-english-core-speaking-web
 
 unless there is a specific reason to use them.
 
+### `kioti.cleanbrain.me` subdomain namespace
+
+`kioti.cleanbrain.me` is not a Kubernetes namespace -- it is a DNS-level
+grouping for KIOTI-related test/demo services, kept separate from the bare
+`cleanbrain.me` hostnames used by general personal projects
+(`english-core-speaking.cleanbrain.me`). Each such service still gets its
+own Kubernetes namespace following the normal `cleanbrain-me-<service-name>`
+rule (e.g. `cleanbrain-me-kioti-crm-discount`) and its own `HTTPRoute`
+attached to the one shared Gateway -- only the hostname sits under
+`*.kioti.cleanbrain.me` instead of directly under `cleanbrain.me`.
+
+Rationale: a single wildcard Cloudflare DNS record covers every current and
+future `kioti-*` service, so adding one is DNS-free; TLS still uses the
+existing per-hostname HTTP-01 flow (no wildcard certificate / DNS-01 solver
+introduced). This was chosen over registering a separate root domain for
+KIOTI work because it needed no new DNS/registrar setup and no change to the
+existing Gateway/cert-manager model, at the cost of not being independently
+transferable to a third party the way a separate domain would be.
+
 ---
 
 # Repository layout
@@ -270,26 +320,35 @@ unless there is a specific reason to use them.
 ```text
 kubernetes/
 ├── namespaces/
-│   └── cleanbrain-me-english-core-speaking.yaml
+│   ├── cleanbrain-me-english-core-speaking.yaml
+│   └── cleanbrain-me-kioti-crm-discount.yaml
 │
 └── apps/
-    └── english-core-speaking/
+    ├── english-core-speaking/
+    │   ├── secret.example.yaml
+    │   ├── rbac.yaml
+    │   ├── httproute.yaml
+    │   │
+    │   ├── postgres/
+    │   │   ├── statefulset.yaml
+    │   │   └── service.yaml
+    │   │
+    │   ├── api/
+    │   │   ├── configmap.yaml
+    │   │   ├── deployment.yaml
+    │   │   └── service.yaml
+    │   │
+    │   └── web/
+    │       ├── deployment.yaml
+    │       └── service.yaml
+    │
+    └── kioti-crm-discount/
         ├── secret.example.yaml
         ├── rbac.yaml
-        ├── httproute.yaml
-        │
-        ├── postgres/
-        │   ├── statefulset.yaml
-        │   └── service.yaml
-        │
-        ├── api/
-        │   ├── configmap.yaml
-        │   ├── deployment.yaml
-        │   └── service.yaml
-        │
-        └── web/
-            ├── deployment.yaml
-            └── service.yaml
+        ├── pvc.yaml
+        ├── deployment.yaml
+        ├── service.yaml
+        └── httproute.yaml
 ```
 
 Plain Kubernetes manifests are used initially.
@@ -347,6 +406,112 @@ ghcr.io/cleanbrain-developer/english-core-speaking-api:<git-sha>
 ```
 
 The `latest` tag may also be published for convenience, but it is not the preferred production deployment reference.
+
+---
+
+## kioti-crm-discount
+
+Source repository:
+
+[`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private)
+
+Internal CRM discount/order tool for KIOTI dealer operations, syncing
+Dealer/Product/PaymentTerm/ProgramCode data from a Salesforce org
+(`crm-kioti-usa.my.salesforce.com`). Currently a single-page demo/PoC-stage
+tool, not a high-traffic production service.
+
+### Runtime
+
+```text
+Namespace:
+  cleanbrain-me-kioti-crm-discount
+
+Hostname:
+  crm-discount.kioti.cleanbrain.me
+```
+
+Unlike `english-core-speaking`, this application is a **single container**
+with no separate API/web split and no PostgreSQL:
+
+```text
+app       -- Next.js app (UI + API routes together)
+```
+
+Persistence is a single SQLite file on a PersistentVolumeClaim (`data`,
+mounted at `/app/data`), not a database Pod. Because SQLite does not support
+concurrent writers across processes, `replicas` must stay at `1` unless the
+application moves off SQLite first.
+
+Routing:
+
+```text
+/*  -> app:3000
+```
+
+Container image:
+
+```text
+ghcr.io/cleanbrain-developer/kioti-crm-discount-enhance-demo
+```
+
+The `kioti-crm-discount-enhance-demo` GitHub repository is **private**, and
+its GHCR packages default to private too -- unlike `english-core-speaking`'s
+public packages, this Deployment needs an `imagePullSecrets` entry (see "GHCR
+image pull authentication" below). Application deployments should use
+immutable Git commit SHA image tags, the same as `english-core-speaking`; a
+`latest` tag is also published for convenience/bootstrap but is not the
+preferred production deployment reference.
+
+### First-time deployment
+
+Prerequisite: push `kioti-crm-discount-enhance-demo`'s `main` branch at least
+once first, so `deployment.yaml`'s `:latest` tag exists in GHCR before
+bootstrap (same reasoning as `english-core-speaking` -- see that section
+above).
+
+```bash
+kubectl apply -f \
+  kubernetes/namespaces/cleanbrain-me-kioti-crm-discount.yaml
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/rbac.yaml
+```
+
+Create the GHCR pull secret (private packages -- see "GHCR image pull
+authentication" below for the exact command), then:
+
+```bash
+cp \
+  kubernetes/apps/kioti-crm-discount/secret.example.yaml \
+  kubernetes/apps/kioti-crm-discount/secret.yaml
+# edit secret.yaml with real values, never commit it
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/secret.yaml
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/pvc.yaml
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/deployment.yaml
+
+kubectl -n cleanbrain-me-kioti-crm-discount \
+  rollout status deployment/app \
+  --timeout=180s
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/service.yaml
+
+kubectl apply -f \
+  kubernetes/apps/kioti-crm-discount/httproute.yaml
+```
+
+On first start, the container's entrypoint applies the Prisma schema and, if
+`/app/data` is empty, seeds the database before the server starts listening
+-- expect a slower first rollout than subsequent ones.
+
+Verify the same way as `english-core-speaking` ("Deployment verification"
+below), substituting the namespace and hostname.
 
 ---
 
@@ -415,6 +580,40 @@ Recommended session secret generation:
 openssl rand -base64 48
 ```
 
+### kioti-crm-discount
+
+Template:
+
+```text
+kubernetes/apps/kioti-crm-discount/secret.example.yaml
+```
+
+Local production file:
+
+```text
+kubernetes/apps/kioti-crm-discount/secret.yaml
+```
+
+Required values:
+
+| Key                 | Purpose                                     |
+| -------------------- | -------------------------------------------- |
+| `DATABASE_URL`      | SQLite file path on the mounted PVC (`/app/data/prod.db`) |
+| `SF_DOMAIN`         | Salesforce org domain                       |
+| `SF_CLIENT_ID`      | Salesforce connected app client ID          |
+| `SF_CLIENT_SECRET`  | Salesforce connected app client secret      |
+| `SF_USERNAME`       | Salesforce API user                         |
+| `SF_PASSWORD`       | Salesforce API user password                |
+| `SF_API_VERSION`    | Salesforce REST API version                 |
+
+**Rotate the Salesforce credentials before first production use.** A prior
+commit in the application repository (`docker-compose.yml`, now fixed to
+read from an untracked `.env` file) hardcoded real values for this org
+directly into git history. The repository is private, which limits exposure,
+but git history still contains the old values -- treat that client
+secret/password as burned and issue new ones from the Salesforce connected
+app before relying on this in production.
+
 ### Google OAuth
 
 Google Cloud Console must contain the production redirect URI:
@@ -428,6 +627,8 @@ The configured application value must exactly match the authorized redirect URI.
 ---
 
 # GHCR image pull authentication
+
+## english-core-speaking: public packages
 
 Current policy: both GHCR packages are **public**.
 
@@ -445,24 +646,37 @@ in the first place -- not by the packages actually being private.
 
 **If a package is ever switched back to private**, anonymous pulls will start failing
 with the same `403 Forbidden` shape, and both a pull Secret and an `imagePullSecrets`
-reference need to come back:
+reference need to come back (same as the kioti-crm-discount procedure directly below).
+Until that happens, don't add either -- an `imagePullSecrets` entry naming a Secret
+that doesn't exist blocks pulls outright, public image or not.
+
+## kioti-crm-discount: private package
+
+The `kioti-crm-discount-enhance-demo` source repository is private, and its GHCR
+package defaults to private as well:
+
+```text
+ghcr.io/cleanbrain-developer/kioti-crm-discount-enhance-demo
+```
+
+Unlike `english-core-speaking`, `deployment.yaml` for this app DOES declare
+`imagePullSecrets: [{name: ghcr-pull}]`, so the `ghcr-pull` Secret must exist in
+`cleanbrain-me-kioti-crm-discount` before the Deployment is applied, or the pod
+will `ImagePullBackOff`:
 
 ```bash
-kubectl -n cleanbrain-me-english-core-speaking \
+kubectl -n cleanbrain-me-kioti-crm-discount \
   create secret docker-registry ghcr-pull \
   --docker-server=ghcr.io \
   --docker-username=<github-username> \
-  --docker-password=<credential-with-read-packages>
+  --docker-password=<PAT-with-read:packages-scope>
 ```
 
-```yaml
-imagePullSecrets:
-  - name: ghcr-pull
-```
-
-added back under each Deployment's `spec.template.spec`. Until that happens, don't add
-either -- an `imagePullSecrets` entry naming a Secret that doesn't exist blocks pulls
-outright, public image or not.
+Use a GitHub Personal Access Token scoped to `read:packages` only, not the
+`GITHUB_TOKEN` used by the build workflow (that token is short-lived and
+scoped to the Actions run, not usable here). If this package is ever made
+public, this Secret and the `imagePullSecrets` entry can both be removed,
+mirroring `english-core-speaking`'s current setup.
 
 ---
 
@@ -699,11 +913,21 @@ Caddy does not exist in the final Kubernetes architecture.
 
 # CI/CD
 
-Application CI/CD lives in:
+Application CI/CD lives in each application repository, not in this one:
 
 ```text
 english-core-speaking/.github/workflows/deploy.yml
+kioti-crm-discount-enhance-demo/.github/workflows/deploy.yml
 ```
+
+Both follow the same model (test -> build/push to GHCR -> SSH -> `kubectl set
+image` -> `kubectl rollout status`), each serialized under its own
+`concurrency.group` and gated by its own repo's `ENABLE_PRODUCTION_DEPLOY`
+variable so the two deploy independently. `kioti-crm-discount-enhance-demo`'s
+workflow additionally has no `test` job with real checks yet (the app repo
+currently has no `test`/`typecheck` npm scripts) -- its `test` job runs
+`lint` and `build` only, which still catches type errors since `next build`
+type-checks. Add real tests to that repo and wire them in when they exist.
 
 Current pipeline:
 
@@ -761,7 +985,11 @@ smallest change that expresses "block one job until an admin flips a switch."
 
 ## Required GitHub Actions configuration
 
-Configure these in the `english-core-speaking` repository.
+Configure these in the `english-core-speaking` repository. The same secret
+names and variable are required in `kioti-crm-discount-enhance-demo` too --
+`HETZNER_SSH_*` values can be the same (same server, same `deploy` Linux
+user), but `ENABLE_PRODUCTION_DEPLOY` is a separate per-repo variable and
+must be set independently once that app's bootstrap is verified.
 
 ### Secrets (Settings -> Secrets and variables -> Actions -> Secrets)
 
@@ -1679,6 +1907,64 @@ Never delete the currently active token before the replacement credential has be
 
 ---
 
+## Multi-application kubeconfig on the deploy host
+
+The numbered steps above ("1. Apply CI RBAC" through "11. CI kubeconfig
+behavior") were written for a single application and, followed literally a
+second time for `kioti-crm-discount`, would **overwrite**
+`/home/deploy/.kube/config` and destroy `english-core-speaking`'s working
+credential -- step 5 builds a brand-new kubeconfig from scratch into a temp
+file, and step 6 installs it by copying over the existing file wholesale.
+
+For a second (and any subsequent) application, instead:
+
+1. Substitute app-specific values throughout:
+
+   | Variable                 | english-core-speaking value | kioti-crm-discount value                    |
+   | ------------------------- | ---------------------------- | --------------------------------------------- |
+   | `DEPLOY_NAMESPACE`        | `cleanbrain-me-english-core-speaking` | `cleanbrain-me-kioti-crm-discount` |
+   | `DEPLOY_SERVICE_ACCOUNT`  | `ci-deployer`                | `ci-deployer`                                 |
+   | `DEPLOY_TOKEN_SECRET`     | `ci-deployer-token`          | `ci-deployer-kioti-crm-discount-token`        |
+   | kubeconfig user name      | `ci-deployer`                | `ci-deployer-kioti-crm-discount`              |
+   | kubeconfig context name   | `ci-deployer@cleanbrain-me-k3s` | `ci-deployer-kioti-crm-discount@cleanbrain-me-k3s` |
+
+   The token Secret and kubeconfig user/context names must differ per app --
+   reusing `ci-deployer-token` or the `ci-deployer` user/context name across
+   two ServiceAccounts in different namespaces will silently clobber
+   whichever was created second.
+
+2. In step 5 ("Build the scoped kubeconfig"), run the `kubectl config
+   set-cluster` / `set-credentials` / `set-context` commands with
+   `--kubeconfig=/home/deploy/.kube/config` directly (as the `deploy` user,
+   or `install`ed with the same ownership afterward) instead of a fresh
+   `$KUBECONFIG_TMP`. This **merges** the new cluster/user/context entries
+   into the existing file rather than replacing it -- the `cleanbrain-me-k3s`
+   cluster entry already exists from the first app's setup and does not need
+   to be redefined, only the new user and context.
+
+3. Do **not** run `kubectl config use-context` for the new context. Changing
+   `current-context` would silently break `english-core-speaking`'s deploy,
+   which relies on it being `ci-deployer@cleanbrain-me-k3s`. Leave
+   `current-context` as-is.
+
+4. Because `current-context` cannot be relied on to select the right
+   identity once more than one app shares the file, `kioti-crm-discount`'s
+   `deploy.yml` (unlike `english-core-speaking`'s) must pass
+   `--context=ci-deployer-kioti-crm-discount@cleanbrain-me-k3s` explicitly on
+   every `kubectl` invocation in its remote script, rather than relying on
+   the implicit current context.
+
+5. Step 11 ("CI kubeconfig behavior")'s `export KUBECONFIG=...` line still
+   applies as-is -- both apps share the one kubeconfig file, distinguished by
+   `--context`, not by separate files.
+
+Steps 1-4 (RBAC), 7 (kubeconfig contents), 8 (identity), 9-10 (`can-i`
+checks), and 12 (real rollout verification) apply per-app unchanged, just
+run again with the substituted values and (for step 8/9/10) the new
+`--context` flag added to each `kubectl auth ...` command.
+
+---
+
 # Immediate CI credential revocation
 
 If the Kubernetes deployment credential is suspected to be compromised, remove authorization first:
@@ -1813,12 +2099,23 @@ Hetzner VM:
 
 Current application resource targets:
 
-| Component  | CPU request | Memory request | CPU limit | Memory limit |
-| ---------- | ----------: | -------------: | --------: | -----------: |
-| PostgreSQL |        250m |          256Mi |     1000m |        512Mi |
-| API        |        100m |          128Mi |      500m |        256Mi |
-| Web        |         50m |           32Mi |      200m |         64Mi |
-| **Total**  |    **400m** |      **416Mi** | **1700m** |    **832Mi** |
+| Component                     | CPU request | Memory request | CPU limit | Memory limit |
+| ------------------------------ | ----------: | -------------: | --------: | -----------: |
+| english-core-speaking/postgres |        250m |          256Mi |     1000m |        512Mi |
+| english-core-speaking/api      |        100m |          128Mi |      500m |        256Mi |
+| english-core-speaking/web      |         50m |           32Mi |      200m |         64Mi |
+| kioti-crm-discount/app         |        150m |          256Mi |      500m |        512Mi |
+| **Total**                      |    **550m** |      **672Mi** | **2200m** |   **1344Mi** |
+
+The combined CPU **limit** total (2200m) exceeds the box's 2 vCPU (2000m)
+capacity. This is expected and not itself a problem -- limits are ceilings
+per Pod, not reservations, and all workloads hitting their limit
+simultaneously is unlikely for these two low-traffic apps -- but it means
+there is no slack left for a third similarly-sized service without either
+raising the VM spec or tightening these limits. Requests (550m / 672Mi) are
+what the scheduler actually reserves and stay comfortably inside budget.
+Re-check with `kubectl top nodes` / `kubectl top pods -A` before adding
+another `kioti-*` test service under this same namespace strategy.
 
 This leaves capacity for:
 

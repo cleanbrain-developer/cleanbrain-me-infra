@@ -1,0 +1,71 @@
+# :latest here is a real, pullable tag by the time you bootstrap -- NOT a
+# placeholder -- because deploy.yml's build-and-push job publishes both
+# :latest and :<git-sha> on every push to main regardless of whether
+# ENABLE_PRODUCTION_DEPLOY is set. This only holds if you push to main at
+# least once BEFORE running "First-time deployment" (bootstrapping against an
+# empty GHCR package would ImagePullBackOff). Ongoing deploys update the
+# running Deployment's image via `kubectl set image` from CI with the
+# immutable :<git-sha> tag and do NOT rewrite this file -- re-applying it
+# as-is after a CI deploy will roll the cluster back to :latest as of that
+# apply.
+#
+# The kioti-crm-discount-enhance-demo GitHub repo is private, and its GHCR
+# packages default to private too (unlike english-core-speaking's public
+# packages) -- so, unlike that app, this Deployment DOES need
+# imagePullSecrets. See README.md "GHCR image pull authentication" for the
+# ghcr-pull Secret this references.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: cleanbrain-me-kioti-crm-discount
+spec:
+  replicas: 1 # SQLite: never scale beyond 1 without moving off SQLite first.
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: app
+          image: ghcr.io/cleanbrain-developer/kioti-crm-discount-enhance-demo:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          # docker-entrypoint.sh runs `prisma db push` on every start and,
+          # on first run only (empty /app/data), seeds the database before
+          # the Next.js server starts listening -- generous initial delays
+          # cover that first-run cold start.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data

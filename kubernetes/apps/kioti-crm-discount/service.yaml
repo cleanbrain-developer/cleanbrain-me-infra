@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: cleanbrain-me-kioti-crm-discount
+spec:
+  selector:
+    app: app
+  ports:
+    - port: 3000
+      targetPort: 3000

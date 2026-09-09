@@ -1,0 +1,28 @@
+# Attaches to the pre-existing shared Gateway in cleanbrain-me-system.
+# Does NOT create the Gateway, cert-manager, or ClusterIssuer -- those
+# already exist and are managed outside this app's manifests.
+#
+# Hostname lives under the kioti.cleanbrain.me namespace (one wildcard
+# Cloudflare DNS record -- *.kioti.cleanbrain.me -- covers this and any
+# future kioti-* test service without further DNS changes). TLS still uses
+# the existing per-hostname HTTP-01 flow, same as english-core-speaking --
+# no wildcard certificate / DNS-01 solver has been introduced for this.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kioti-crm-discount
+  namespace: cleanbrain-me-kioti-crm-discount
+spec:
+  parentRefs:
+    - name: cleanbrain-me-gateway
+      namespace: cleanbrain-me-system
+  hostnames:
+    - crm-discount.kioti.cleanbrain.me
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: app
+          port: 3000
