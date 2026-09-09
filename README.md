@@ -123,14 +123,45 @@ Namespace:
 GatewayClass:
   traefik
 
-Listeners:
-  HTTP  8000
-  HTTPS 8443
+Annotation:
+  cert-manager.io/cluster-issuer: cleanbrain-me-letsencrypt-prod
+```
+
+This Gateway resource itself is **not tracked in this git repository** -- it
+was created directly in-cluster and is edited with `kubectl patch`/`kubectl
+edit`, not `kubectl apply -f` from a file here. `kubernetes/apps/*/httproute.yaml`
+files in this repo only attach *to* it; they never define it.
+
+Its listeners are **one per HTTPS hostname**, not a single catch-all HTTPS
+listener -- there is no wildcard listener and no wildcard certificate. Each
+listener carries its own `hostname` and its own `tls.certificateRefs`
+pointing at a per-app Secret name; the `cert-manager.io/cluster-issuer`
+annotation on the Gateway (not on each listener) is what makes cert-manager
+auto-create and manage a `Certificate` for every listener that has a
+`tls.certificateRefs` entry (this is cert-manager's Gateway API "gateway-shim"
+support -- it is why no application repo or manifest here ever defines a
+`Certificate` resource directly). Current listeners:
+
+```text
+name: http                          port: 8000  protocol: HTTP   (no hostname restriction)
+name: english-core-speaking-https   port: 8443  protocol: HTTPS  hostname: english-core-speaking.cleanbrain.me
+name: entrance-https                port: 8443  protocol: HTTPS  hostname: cleanbrain.me
+name: kioti-crm-discount-https       port: 8443  protocol: HTTPS  hostname: crm-discount.kioti.cleanbrain.me  (added 2026-09-09, see discrepancy note below)
 ```
 
 Applications must **not recreate the Gateway**.
 
-Each application creates its own `HTTPRoute` and attaches it to the shared Gateway using a cross-namespace `parentRef`.
+Each application creates its own `HTTPRoute` and attaches it to the shared
+Gateway using a cross-namespace `parentRef` -- but an `HTTPRoute` alone is
+**not sufficient** for a new hostname to get TLS. Every new hostname also
+needs its own listener added to this Gateway first, or Traefik falls back to
+serving its own self-signed `TRAEFIK DEFAULT CERT` for that hostname. See
+"TLS" > "How a TLS Secret actually gets created" below for the exact
+mechanism and the `kubectl` procedure -- this was originally missed for
+`kioti-crm-discount`'s first deployment (`HTTPRoute` was
+`Accepted=True`/`ResolvedRefs=True`, DNS resolved, TCP connected on 443, but
+the TLS handshake presented the untrusted default cert because no listener
+had ever been added for it).
 
 The shared Gateway allows application routes from other namespaces.
 
@@ -307,15 +338,21 @@ hostname -- update this section's guidance (and the equivalent step in an
 app's own "First-time deployment" walkthrough) accordingly instead of
 treating TLS as unresolved/manual per app.
 
-**Discrepancy noticed in passing, not yet resolved**: as of this
-verification, the live Gateway has no `kioti-crm-discount-https` listener
-and `kubectl get certificate -n cleanbrain-me-system` shows only the
-`english-core-speaking` certificate -- despite this document elsewhere
-describing `cleanbrain-me-kioti-crm-discount-tls` as already issued. Either
-that app's HTTPS listener/rollout hasn't actually been completed yet, or
-this was issued and later removed. Not investigated further here since it
-doesn't block `cleanbrain-me-entrance`; check before relying on
-`crm-discount.kioti.cleanbrain.me` being reachable over HTTPS.
+**Update 2026-09-09, resolving the discrepancy noted above**: confirmed via
+`kubectl describe httproute` that `kioti-crm-discount`'s Deployment/Service/
+HTTPRoute were all applied and healthy (Pod `Running`, `HTTPRoute`
+`Accepted=True`/`ResolvedRefs=True`), and DNS resolved correctly -- but the
+Gateway genuinely had no `kioti-crm-discount-https` listener yet, exactly as
+this note suspected. `curl -v` against the hostname connected on 443 but got
+Windows `SEC_E_UNTRUSTED_ROOT`; inspecting the cert directly showed `issuer=CN
+= TRAEFIK DEFAULT CERT` -- Traefik's fallback, not a Let's Encrypt cert --
+confirming cert-manager had never attempted issuance because nothing had told
+it to. Fixed by JSON-patching the listener in per "How a TLS Secret actually
+gets created" above. This is the same root cause as `cleanbrain-me-entrance`
+needed a listener added for, and confirms the general rule stated below:
+**a new `HTTPRoute` alone never gets TLS -- the Gateway listener step is
+mandatory and is easy to skip because `HTTPRoute` status looks fully healthy
+without it.**
 
 Every certificate is issued the same way, per-hostname via HTTP-01 -- no
 wildcard certificate (which would require a DNS-01 solver and a Cloudflare
@@ -324,9 +361,10 @@ API token) has been introduced. See "Naming conventions" below for how
 without adding that complexity.
 
 `english-core-speaking`'s and `cleanbrain-me-entrance`'s certificates are
-confirmed issued and `Ready` (see "How a TLS Secret actually gets created"
-above). `kioti-crm-discount`'s is not currently confirmed -- see the
-discrepancy noted above.
+confirmed issued and `Ready`. `kioti-crm-discount`'s listener was just added
+(see the update above) -- confirm its Certificate reaches `READY: True`
+with `kubectl -n cleanbrain-me-system get certificate` before relying on
+`crm-discount.kioti.cleanbrain.me` externally.
 
 ### ACME HTTP-01 implementation
 
@@ -446,9 +484,15 @@ Rationale: a single wildcard Cloudflare DNS record covers every current and
 future `kioti-*` service, so adding one is DNS-free; TLS still uses the
 existing per-hostname HTTP-01 flow (no wildcard certificate / DNS-01 solver
 introduced). This was chosen over registering a separate root domain for
-KIOTI work because it needed no new DNS/registrar setup and no change to the
-existing Gateway/cert-manager model, at the cost of not being independently
-transferable to a third party the way a separate domain would be.
+KIOTI work because it needed no new DNS/registrar setup, at the cost of not
+being independently transferable to a third party the way a separate domain
+would be.
+
+DNS-free does **not** mean work-free: each new hostname (`kioti-*` or
+otherwise) still needs its own listener added to the shared Gateway before
+it gets a real certificate -- see "Adding a new hostname to the shared
+Gateway" above. This was originally missed for `kioti-crm-discount`'s own
+first deployment; do not assume a new `HTTPRoute` alone is enough.
 
 ---
 
@@ -643,10 +687,16 @@ no pull secret is needed here, matching `english-core-speaking`.
 
 ## 2. CI ServiceAccount token and deploy-host kubeconfig
 
-This is the third application sharing `/home/deploy/.kube/config` -- follow
-"Multi-application kubeconfig on the deploy host" below, not the single-app
-numbered steps 1-12 literally (those would overwrite the existing file).
-Substituting this app's values from that section's table:
+Completed and verified: `kubectl auth whoami` returned
+`system:serviceaccount:cleanbrain-me-entrance:ci-deployer`, `can-i patch
+deployment/web` returned `yes`, and `can-i get secrets` returned `no`, all
+via the `ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s` context
+merged into the same `/home/deploy/.kube/config` as `english-core-speaking`
+without disturbing its `current-context`. This is the third application
+sharing that file -- the commands below followed "Multi-application
+kubeconfig on the deploy host" below rather than the single-app numbered
+steps 1-12 literally (those would have overwritten the existing file),
+substituting this app's values from that section's table:
 
 ```bash
 export DEPLOY_NAMESPACE="cleanbrain-me-entrance"
@@ -718,17 +768,17 @@ sudo -u deploy -H env KUBECONFIG=/home/deploy/.kube/config \
 
 ## 3. Enable CI deploys
 
-Once the above is verified, set `ENABLE_PRODUCTION_DEPLOY=true` as a
-repository variable on `cleanbrain-me-entrance` (Settings -> Secrets and
-variables -> Actions -> Variables) and push (or re-run) to trigger a real
-deploy through the workflow, confirming `kubectl set image` /
-`kubectl rollout status` succeed end to end (step 12 below).
+Completed and verified: `ENABLE_PRODUCTION_DEPLOY=true` is set as a
+repository variable on `cleanbrain-me-entrance`, and a real triggered run
+(`test` -> `build-and-push` -> `deploy`) succeeded end to end -- `kubectl
+set image` and `kubectl rollout status` both completed over the CI SSH
+bridge, matching step 12 below.
 
-Verify the deployed service the same way as `english-core-speaking`
-("Deployment verification" below), substituting the namespace and
-hostname; there is no `/api/health` endpoint for this app, so the external
-check is just `curl -I https://cleanbrain.me` and a browser load of the
-page.
+Verified the same way as `english-core-speaking` ("Deployment
+verification" below): `curl -I https://cleanbrain.me` returns `HTTP/2 200`
+(there is no `/api/health` endpoint for this app, so no equivalent
+internal check was needed). `cleanbrain-me-entrance` is fully deployed with
+a working CI/CD pipeline.
 
 ---
 
@@ -832,6 +882,16 @@ kubectl apply -f \
 On first start, the container's entrypoint applies the Prisma schema and, if
 `/app/data` is empty, seeds the database before the server starts listening
 -- expect a slower first rollout than subsequent ones.
+
+**Also required, and easy to miss:** the `HTTPRoute` above does not by
+itself get this hostname a real TLS certificate. Add a Gateway listener for
+`crm-discount.kioti.cleanbrain.me` -- see "Adding a new hostname to the
+shared Gateway" above -- and confirm the `cleanbrain-me-kioti-crm-discount-tls`
+Certificate reaches `READY: True` before testing externally. Skipping this
+step is exactly what happened during this app's own first bootstrap:
+`HTTPRoute` showed `Accepted=True`/`ResolvedRefs=True` and DNS resolved
+correctly, but the hostname served Traefik's self-signed default cert and
+returned 404 until the listener was added.
 
 Verify the same way as `english-core-speaking` ("Deployment verification"
 below), substituting the namespace and hostname.
