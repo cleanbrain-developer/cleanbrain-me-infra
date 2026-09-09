@@ -2,14 +2,15 @@
 # as english-core-speaking's httproute.yaml. Does NOT create the Gateway,
 # cert-manager, or ClusterIssuer.
 #
-# TLS is resolved: this hostname is the bare apex domain (cleanbrain.me),
-# not a *.cleanbrain.me subdomain, so it needed its own HTTPS listener on
-# the live Gateway (which is not tracked in this repository -- see
-# README.md "Networking" > "Gateway") referencing a cleanbrain-me-entrance-tls
-# Secret. That listener was added and cert-manager auto-issued the
-# certificate via its Gateway API integration -- see README.md "TLS" > "How
-# a TLS Secret actually gets created" for the confirmed mechanism and the
-# exact listener that was applied (2026-09-09).
+# TLS: this hostname is the bare apex domain (cleanbrain.me), not a
+# *.cleanbrain.me subdomain, so it needs its own HTTPS listener on the live
+# Gateway (not tracked in this repository -- see README.md "Networking" >
+# "Gateway") referencing a cleanbrain-me-entrance-tls Secret. This route
+# applies fine on its own, but HTTPS won't actually serve a valid
+# certificate for cleanbrain.me until that listener exists -- cert-manager
+# then auto-issues the certificate via its Gateway API integration. See
+# README.md "TLS" > "How a TLS Secret actually gets created" for the
+# confirmed mechanism and the exact listener to add.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
