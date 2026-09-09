@@ -354,17 +354,22 @@ needed a listener added for, and confirms the general rule stated below:
 mandatory and is easy to skip because `HTTPRoute` status looks fully healthy
 without it.**
 
+`cleanbrain-me-kioti-crm-discount-tls` issued successfully once the listener
+was added (`READY: True` within under a minute, same HTTP-01 speed as
+`cleanbrain-me-entrance`'s). Confirmed end to end from outside the cluster:
+`openssl s_client` against `crm-discount.kioti.cleanbrain.me:443` shows
+`issuer=... O = Let's Encrypt`, and `curl -L` follows the app's own `/` ->
+`/orders` redirect to `200 OK`.
+
 Every certificate is issued the same way, per-hostname via HTTP-01 -- no
 wildcard certificate (which would require a DNS-01 solver and a Cloudflare
 API token) has been introduced. See "Naming conventions" below for how
 `kioti.cleanbrain.me` is used as a namespace for multiple future services
 without adding that complexity.
 
-`english-core-speaking`'s and `cleanbrain-me-entrance`'s certificates are
-confirmed issued and `Ready`. `kioti-crm-discount`'s listener was just added
-(see the update above) -- confirm its Certificate reaches `READY: True`
-with `kubectl -n cleanbrain-me-system get certificate` before relying on
-`crm-discount.kioti.cleanbrain.me` externally.
+All three current certificates (`english-core-speaking`, `cleanbrain-me-entrance`,
+`kioti-crm-discount`) are confirmed issued and `Ready` -- see the update
+above for `kioti-crm-discount`'s.
 
 ### ACME HTTP-01 implementation
 
