@@ -10,6 +10,7 @@ Current application repositories:
 
 - [`english-core-speaking`](https://github.com/cleanbrain-developer/english-core-speaking)
 - [`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private repository)
+- [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
 
 ---
 
@@ -185,7 +186,25 @@ TLS Secret Namespace:
   cleanbrain-me-system
 ```
 
-Both certificates are issued the same way, per-hostname via HTTP-01 -- no
+For `cleanbrain-me-entrance` (**not yet issued**):
+
+```text
+Hostname:
+  cleanbrain.me
+
+TLS Secret:
+  cleanbrain-me-entrance-tls  (planned name, following the <app>-tls convention)
+
+TLS Secret Namespace:
+  cleanbrain-me-system
+```
+
+This would be the first certificate for the bare apex domain rather than a
+subdomain. Confirm with the cluster administrator whether the existing
+HTTP-01/ClusterIssuer setup issues this the same way as the subdomain certs
+above, before applying `kubernetes/apps/entrance/httproute.yaml`.
+
+Both existing certificates are issued the same way, per-hostname via HTTP-01 -- no
 wildcard certificate (which would require a DNS-01 solver and a Cloudflare
 API token) has been introduced. See "Naming conventions" below for how
 `kioti.cleanbrain.me` is used as a namespace for multiple future services
@@ -240,6 +259,8 @@ Current application hostnames:
 english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 ```
+
+`cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain -- **unverified**: whether an A record already exists for the apex (separate from any NS/registrar-level records) and points at the Hetzner public IP has not been confirmed in this repository. Check this in Cloudflare DNS before relying on `kubernetes/apps/entrance/httproute.yaml`.
 
 `kioti.cleanbrain.me` is a dedicated subdomain namespace for KIOTI-related
 test/demo services (see "Naming conventions" below), covered by a single
@@ -321,7 +342,8 @@ transferable to a third party the way a separate domain would be.
 kubernetes/
 ├── namespaces/
 │   ├── cleanbrain-me-english-core-speaking.yaml
-│   └── cleanbrain-me-kioti-crm-discount.yaml
+│   ├── cleanbrain-me-kioti-crm-discount.yaml
+│   └── cleanbrain-me-entrance.yaml
 │
 └── apps/
     ├── english-core-speaking/
@@ -342,10 +364,16 @@ kubernetes/
     │       ├── deployment.yaml
     │       └── service.yaml
     │
-    └── kioti-crm-discount/
-        ├── secret.example.yaml
+    ├── kioti-crm-discount/
+    │   ├── secret.example.yaml
+    │   ├── rbac.yaml
+    │   ├── pvc.yaml
+    │   ├── deployment.yaml
+    │   ├── service.yaml
+    │   └── httproute.yaml
+    │
+    └── entrance/
         ├── rbac.yaml
-        ├── pvc.yaml
         ├── deployment.yaml
         ├── service.yaml
         └── httproute.yaml
@@ -406,6 +434,102 @@ ghcr.io/cleanbrain-developer/english-core-speaking-api:<git-sha>
 ```
 
 The `latest` tag may also be published for convenience, but it is not the preferred production deployment reference.
+
+---
+
+## entrance
+
+Source repository:
+
+[`cleanbrain-developer/cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
+
+Landing page for the bare `cleanbrain.me` domain: a static service
+directory listing the other `cleanbrain.me` services with links out to
+each. No backend, no database, no auth -- see that repository's
+`docs/product/scope.md`.
+
+### Runtime
+
+```text
+Namespace:
+  cleanbrain-me-entrance
+
+Hostname:
+  cleanbrain.me
+```
+
+Application components:
+
+```text
+web
+```
+
+Routing:
+
+```text
+/*  -> web:80
+```
+
+Container image:
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-entrance
+```
+
+Application deployments should use immutable Git commit SHA image tags.
+The `latest` tag is also published for convenience/bootstrap but is not the
+preferred production deployment reference, same as the other apps.
+
+### First-time deployment
+
+Prerequisite: push `cleanbrain-me-entrance`'s `main` branch at least once
+first, so `deployment.yaml`'s `:latest` tag exists in GHCR before bootstrap
+(same reasoning as `english-core-speaking` -- see that section above). This
+has already been done; the first Actions run (`test` + `build-and-push`)
+succeeded.
+
+**Before running the steps below**, resolve the two open items flagged in
+`kubernetes/apps/entrance/httproute.yaml` and the "TLS" / "DNS" sections
+above: whether an A record exists for the bare `cleanbrain.me` apex, and
+whether a TLS Secret (`cleanbrain-me-entrance-tls`) needs to be issued for
+it. This app's `httproute.yaml` is the first one in this repository to
+target the apex domain instead of a subdomain, so nothing here confirms the
+existing Gateway/cert-manager setup covers it without checking the live
+cluster.
+
+```bash
+kubectl apply -f \
+  kubernetes/namespaces/cleanbrain-me-entrance.yaml
+
+kubectl apply -f \
+  kubernetes/apps/entrance/rbac.yaml
+
+kubectl apply -f \
+  kubernetes/apps/entrance/deployment.yaml
+
+kubectl -n cleanbrain-me-entrance \
+  rollout status deployment/web \
+  --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/entrance/service.yaml
+
+kubectl apply -f \
+  kubernetes/apps/entrance/httproute.yaml
+```
+
+Both GHCR image pull packages so far (`english-core-speaking`'s) are
+public; `cleanbrain-me-entrance`'s repository is also public, so its GHCR
+package is expected to default to public too, but this has not been
+explicitly confirmed against the package's actual visibility setting -- see
+"GHCR image pull authentication" below. If it turns out to default to
+private, add a pull secret and `imagePullSecrets` entry the same way
+`kioti-crm-discount`'s Deployment does before applying `deployment.yaml`.
+
+Verify the same way as `english-core-speaking` ("Deployment verification"
+below), substituting the namespace and hostname; there is no `/api/health`
+endpoint for this app, so the external check is just `curl -I
+https://cleanbrain.me` and a browser load of the page.
 
 ---
 
@@ -649,6 +773,22 @@ with the same `403 Forbidden` shape, and both a pull Secret and an `imagePullSec
 reference need to come back (same as the kioti-crm-discount procedure directly below).
 Until that happens, don't add either -- an `imagePullSecrets` entry naming a Secret
 that doesn't exist blocks pulls outright, public image or not.
+
+## cleanbrain-me-entrance: expected public, unconfirmed
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-entrance
+```
+
+`cleanbrain-me-entrance`'s source repository is public, like `english-core-speaking`'s,
+so its GHCR package is expected to default to public and pull anonymously the same way --
+`kubernetes/apps/entrance/deployment.yaml` accordingly has no `imagePullSecrets` entry.
+This has **not** been explicitly confirmed against the package's actual visibility
+setting in GitHub (checking it required a broader token scope than was available when
+this was written). Confirm the package's visibility before or during first-time
+deployment; if it turns out to default to private, add a pull secret and
+`imagePullSecrets` entry the same way `kioti-crm-discount` does directly below, scoped to
+the `cleanbrain-me-entrance` namespace.
 
 ## kioti-crm-discount: private package
 
@@ -1920,13 +2060,17 @@ For a second (and any subsequent) application, instead:
 
 1. Substitute app-specific values throughout:
 
-   | Variable                 | english-core-speaking value | kioti-crm-discount value                    |
-   | ------------------------- | ---------------------------- | --------------------------------------------- |
-   | `DEPLOY_NAMESPACE`        | `cleanbrain-me-english-core-speaking` | `cleanbrain-me-kioti-crm-discount` |
-   | `DEPLOY_SERVICE_ACCOUNT`  | `ci-deployer`                | `ci-deployer`                                 |
-   | `DEPLOY_TOKEN_SECRET`     | `ci-deployer-token`          | `ci-deployer-kioti-crm-discount-token`        |
-   | kubeconfig user name      | `ci-deployer`                | `ci-deployer-kioti-crm-discount`              |
-   | kubeconfig context name   | `ci-deployer@cleanbrain-me-k3s` | `ci-deployer-kioti-crm-discount@cleanbrain-me-k3s` |
+   | Variable                 | english-core-speaking value | kioti-crm-discount value                    | entrance value |
+   | ------------------------- | ---------------------------- | --------------------------------------------- | --------------- |
+   | `DEPLOY_NAMESPACE`        | `cleanbrain-me-english-core-speaking` | `cleanbrain-me-kioti-crm-discount` | `cleanbrain-me-entrance` |
+   | `DEPLOY_SERVICE_ACCOUNT`  | `ci-deployer`                | `ci-deployer`                                 | `ci-deployer` |
+   | `DEPLOY_TOKEN_SECRET`     | `ci-deployer-token`          | `ci-deployer-kioti-crm-discount-token`        | `ci-deployer-cleanbrain-me-entrance-token` |
+   | kubeconfig user name      | `ci-deployer`                | `ci-deployer-kioti-crm-discount`              | `ci-deployer-cleanbrain-me-entrance` |
+   | kubeconfig context name   | `ci-deployer@cleanbrain-me-k3s` | `ci-deployer-kioti-crm-discount@cleanbrain-me-k3s` | `ci-deployer-cleanbrain-me-entrance@cleanbrain-me-k3s` |
+
+   The entrance value's context name matches the literal string already
+   hardcoded in `cleanbrain-me-entrance`'s own `.github/workflows/deploy.yml`
+   -- keep the two in sync if either ever changes.
 
    The token Secret and kubeconfig user/context names must differ per app --
    reusing `ci-deployer-token` or the `ci-deployer` user/context name across
@@ -2105,17 +2249,21 @@ Current application resource targets:
 | english-core-speaking/api      |        100m |          128Mi |      500m |        256Mi |
 | english-core-speaking/web      |         50m |           32Mi |      200m |         64Mi |
 | kioti-crm-discount/app         |        150m |          256Mi |      500m |        512Mi |
-| **Total**                      |    **550m** |      **672Mi** | **2200m** |   **1344Mi** |
+| entrance/web                   |         50m |           32Mi |      200m |         64Mi |
+| **Total**                      |    **600m** |      **704Mi** | **2400m** |   **1408Mi** |
 
-The combined CPU **limit** total (2200m) exceeds the box's 2 vCPU (2000m)
-capacity. This is expected and not itself a problem -- limits are ceilings
-per Pod, not reservations, and all workloads hitting their limit
-simultaneously is unlikely for these two low-traffic apps -- but it means
-there is no slack left for a third similarly-sized service without either
-raising the VM spec or tightening these limits. Requests (550m / 672Mi) are
-what the scheduler actually reserves and stay comfortably inside budget.
-Re-check with `kubectl top nodes` / `kubectl top pods -A` before adding
-another `kioti-*` test service under this same namespace strategy.
+The combined CPU **limit** total (2400m) exceeds the box's 2 vCPU (2000m)
+capacity, and by a larger margin than before `entrance/web` was added --
+this is the "third similarly-sized service" scenario this section already
+warned about. This is still expected and not itself a problem -- limits are
+ceilings per Pod, not reservations, and all workloads hitting their limit
+simultaneously at once is unlikely for these low-traffic apps -- but there
+is now no slack left at all for a further service without raising the VM
+spec or tightening existing limits. Requests (600m / 704Mi) are what the
+scheduler actually reserves and stay comfortably inside budget. Re-check
+with `kubectl top nodes` / `kubectl top pods -A` after `entrance/web`'s
+first-time deployment, and before adding another `kioti-*` test service or
+any other new service under this same namespace strategy.
 
 This leaves capacity for:
 

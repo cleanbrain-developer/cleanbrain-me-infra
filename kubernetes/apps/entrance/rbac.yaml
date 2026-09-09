@@ -1,0 +1,57 @@
+# Least-privilege identity for the GitHub Actions SSH deploy bridge
+# (.github/workflows/deploy.yml in the cleanbrain-me-entrance repo).
+#
+# This is a separate identity from english-core-speaking's ci-deployer and
+# kioti-crm-discount's ci-deployer -- per CLAUDE.md, CI Kubernetes identities
+# are designed per service, never widened to cover multiple services. It is
+# a namespaced Role (not ClusterRole), bound only inside
+# cleanbrain-me-entrance, so it is structurally incapable of touching any
+# other namespace -- including cleanbrain-me-system (Gateway, ClusterIssuer,
+# cert-manager) -- no matter what verbs it's granted here.
+#
+# Applied once by the cluster administrator as part of bootstrap (see
+# README.md "One-time server setup"). The CI identity itself has no
+# permission to modify this file's resources (no rbac.authorization.k8s.io
+# access is granted below), so it cannot escalate or re-scope itself.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-entrance
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-entrance
+rules:
+  # Exactly what `kubectl set image` (a patch) and `kubectl rollout status`
+  # (get + watch) need, and nothing else. No create/update/delete, no verbs
+  # on Secrets/ConfigMaps/Pods -- this app has none, but the Role doesn't
+  # grant them anyway, matching english-core-speaking's rbac.yaml.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["web"]
+    verbs: ["get", "patch"]
+  # resourceNames can't scope "watch"/"list" (they filter get/patch/delete
+  # only), so those two verbs are granted on the resource type -- still
+  # confined to this namespace by the Role/RoleBinding boundary, and
+  # `kubectl rollout status web` still only reports on the one Deployment
+  # named on the command line.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-entrance
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer
+    namespace: cleanbrain-me-entrance
+roleRef:
+  kind: Role
+  name: ci-deployer
+  apiGroup: rbac.authorization.k8s.io

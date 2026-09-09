@@ -1,0 +1,42 @@
+# :latest is real by bootstrap time only if the cleanbrain-me-entrance
+# repo's main branch has been pushed at least once first (it has -- see
+# that repo's Actions run history).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cleanbrain-me-entrance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/cleanbrain-developer/cleanbrain-me-entrance:latest
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
