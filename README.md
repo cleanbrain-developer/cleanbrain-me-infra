@@ -186,99 +186,143 @@ TLS Secret Namespace:
   cleanbrain-me-system
 ```
 
-For `cleanbrain-me-entrance` (**not yet issued**):
+For `cleanbrain-me-entrance` (**issued 2026-09-09**):
 
 ```text
 Hostname:
   cleanbrain.me
 
 TLS Secret:
-  cleanbrain-me-entrance-tls  (planned name, following the <app>-tls convention)
+  cleanbrain-me-entrance-tls
 
 TLS Secret Namespace:
   cleanbrain-me-system
 ```
 
-This would be the first certificate for the bare apex domain rather than a
-subdomain. Given "ACME HTTP-01 implementation" below (per-hostname
-`Certificate` objects driving a Traefik Ingress HTTP-01 solver, not a
-Gateway-API-native cert-manager integration), the existing two TLS Secrets
-were most likely produced by a `cert-manager.io/v1` `Certificate` object
-per hostname rather than anything automatic tied to the Gateway. Before
-applying `kubernetes/apps/entrance/httproute.yaml`, as cluster administrator:
+### How a TLS Secret actually gets created
 
-1. Inspect what actually produced the existing certs, to confirm the
-   pattern instead of assuming it:
+Verified directly against the live cluster (2026-09-09) rather than
+assumed: the `cleanbrain-me-english-core-speaking-tls` `Certificate` object
+in `cleanbrain-me-system` has an `ownerReference` naming the
+`cleanbrain-me-gateway` Gateway as its controller, and the Gateway itself
+carries a `cert-manager.io/cluster-issuer: cleanbrain-me-letsencrypt-prod`
+annotation. This is cert-manager's Gateway API integration ("Gateway
+Shim"): cert-manager watches the Gateway's `spec.listeners`, and for any
+HTTPS listener whose `tls.certificateRefs` names a Secret that doesn't
+exist yet, it automatically creates and issues a matching `Certificate`
+(owned by the Gateway, using the Gateway's `hostname` for that listener as
+the cert's `dnsNames`). **No standalone `Certificate` object needs to be
+applied by hand** -- adding the listener is the whole action.
 
-   ```bash
-   kubectl get certificate -n cleanbrain-me-system
-   kubectl get certificate -n cleanbrain-me-system \
-     -o yaml <existing-english-core-speaking-or-kioti-cert-name>
-   kubectl get gateway cleanbrain-me-gateway -n cleanbrain-me-system -o yaml
-   ```
+Each existing hostname has its own dedicated listener (not one listener
+with multiple `certificateRefs`):
 
-   The Gateway output matters specifically for its HTTPS listener's
-   `tls.certificateRefs`: if it's a single-secret-per-listener design, a
-   new listener is needed for `cleanbrain.me`; if one listener already
-   lists multiple `certificateRefs` (SNI-multiplexed), the new secret only
-   needs to be appended to that list. This repository has no tracked
-   Gateway manifest to check against -- it must be read from the live
-   cluster.
+```yaml
+# from `kubectl get gateway cleanbrain-me-gateway -n cleanbrain-me-system -o yaml`
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: http
+      port: 8000
+      protocol: HTTP
+      allowedRoutes:
+        namespaces: { from: All }
+    - name: english-core-speaking-https
+      hostname: english-core-speaking.cleanbrain.me
+      port: 8443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: cleanbrain-me-english-core-speaking-tls
+      allowedRoutes:
+        namespaces: { from: All }
+```
 
-2. Request the certificate, mirroring the existing `Certificate` object's
-   `issuerRef`/spec shape found in step 1 (adjust below if it differs):
+**Adding `cleanbrain-me-entrance` therefore required only one action**:
+append a new listener to the live Gateway (this file is not tracked in
+this repository -- see "Networking" > "Gateway" above -- so this is a
+direct `kubectl apply` against the live object, done as cluster
+administrator, not a change to a manifest here):
 
-   ```bash
-   cat <<'EOF' | kubectl apply -f -
-   apiVersion: cert-manager.io/v1
-   kind: Certificate
-   metadata:
-     name: cleanbrain-me-entrance
-     namespace: cleanbrain-me-system
-   spec:
-     secretName: cleanbrain-me-entrance-tls
-     issuerRef:
-       name: cleanbrain-me-letsencrypt-prod
-       kind: ClusterIssuer
-     dnsNames:
-       - cleanbrain.me
-   EOF
+```bash
+cat <<'EOF' | kubectl apply -f -
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cleanbrain-me-gateway
+  namespace: cleanbrain-me-system
+  annotations:
+    cert-manager.io/cluster-issuer: cleanbrain-me-letsencrypt-prod
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: http
+      port: 8000
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: english-core-speaking-https
+      hostname: english-core-speaking.cleanbrain.me
+      port: 8443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: cleanbrain-me-english-core-speaking-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: entrance-https
+      hostname: cleanbrain.me
+      port: 8443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: cleanbrain-me-entrance-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+EOF
 
-   kubectl get certificate cleanbrain-me-entrance \
-     -n cleanbrain-me-system -w
-   ```
+kubectl get certificate -n cleanbrain-me-system -w
+```
 
-   Wait for `READY: True` before proceeding -- HTTP-01 issuance requires
-   the apex A record to already resolve to this server, which is confirmed
-   (see "DNS" above).
+cert-manager then auto-created `cleanbrain-me-entrance-tls` and issued it
+via HTTP-01 -- the apex A record was already confirmed pointing at this
+server (see "DNS" above), so validation succeeded without further action.
 
-3. If step 1 showed the Gateway needs a new listener (rather than an
-   append to an existing `certificateRefs` list), add one for
-   `cleanbrain.me` referencing `cleanbrain-me-entrance-tls`, matching the
-   existing listeners' `port`/`protocol`/`allowedRoutes` shape. This file
-   is not tracked in this repository (see "Networking" > "Gateway" above),
-   so this is a direct `kubectl edit`/`kubectl apply` against the live
-   Gateway object, not a change to a manifest here.
+**Note for future services**: this same "add a listener, cert-manager
+issues automatically" step is the real, general procedure for any new
+hostname -- update this section's guidance (and the equivalent step in an
+app's own "First-time deployment" walkthrough) accordingly instead of
+treating TLS as unresolved/manual per app.
 
-4. Once the Secret exists and the Gateway can serve it, apply
-   `kubernetes/apps/entrance/httproute.yaml` and verify with `curl -I
-   https://cleanbrain.me`.
+**Discrepancy noticed in passing, not yet resolved**: as of this
+verification, the live Gateway has no `kioti-crm-discount-https` listener
+and `kubectl get certificate -n cleanbrain-me-system` shows only the
+`english-core-speaking` certificate -- despite this document elsewhere
+describing `cleanbrain-me-kioti-crm-discount-tls` as already issued. Either
+that app's HTTPS listener/rollout hasn't actually been completed yet, or
+this was issued and later removed. Not investigated further here since it
+doesn't block `cleanbrain-me-entrance`; check before relying on
+`crm-discount.kioti.cleanbrain.me` being reachable over HTTPS.
 
-This runbook is inferred from this repository's documented pattern, not
-independently verified against the live cluster -- correct it once step 1's
-actual output is known, and consider committing a tracked `Certificate`
-manifest afterward if that turns out to be this repo's actual mechanism
-(unlike the Gateway/ClusterIssuer, a per-app `Certificate` object plausibly
-belongs alongside each app's other manifests rather than as unmanaged
-cluster bootstrap).
-
-Both existing certificates are issued the same way, per-hostname via HTTP-01 -- no
+Every certificate is issued the same way, per-hostname via HTTP-01 -- no
 wildcard certificate (which would require a DNS-01 solver and a Cloudflare
 API token) has been introduced. See "Naming conventions" below for how
 `kioti.cleanbrain.me` is used as a namespace for multiple future services
 without adding that complexity.
 
-The production certificates are already issued successfully.
+`english-core-speaking` and `cleanbrain-me-entrance`'s certificates are
+confirmed issued and `Ready` as of 2026-09-09 (see "How a TLS Secret
+actually gets created" above). `kioti-crm-discount`'s is not currently
+confirmed -- see the discrepancy noted above.
 
 ### ACME HTTP-01 implementation
 
@@ -556,11 +600,10 @@ first, so `deployment.yaml`'s `:latest` tag exists in GHCR before bootstrap
 has already been done; the first Actions run (`test` + `build-and-push`)
 succeeded.
 
-DNS is confirmed (see "DNS" above). **Before running the steps below**,
-complete the TLS runbook in "TLS" above -- `cleanbrain-me-entrance-tls`
-must exist in `cleanbrain-me-system` and the Gateway must be able to serve
-it, or the last `httproute.yaml` step below will apply cleanly but HTTPS
-for `cleanbrain.me` won't actually work yet.
+DNS and TLS are both resolved: the apex A record already existed, and the
+`cleanbrain-me-entrance-tls` certificate was issued by adding a listener to
+the live Gateway (see "TLS" > "How a TLS Secret actually gets created"
+above) -- confirmed `Ready` on 2026-09-09.
 
 ## 1. Namespace, RBAC, Deployment, Service, HTTPRoute
 
