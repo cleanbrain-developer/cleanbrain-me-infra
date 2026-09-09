@@ -186,14 +186,14 @@ TLS Secret Namespace:
   cleanbrain-me-system
 ```
 
-For `cleanbrain-me-entrance` (**not yet issued** -- see below):
+For `cleanbrain-me-entrance` (**issued and confirmed working 2026-09-09**):
 
 ```text
 Hostname:
   cleanbrain.me
 
 TLS Secret:
-  cleanbrain-me-entrance-tls  (planned name, following the <app>-tls convention)
+  cleanbrain-me-entrance-tls
 
 TLS Secret Namespace:
   cleanbrain-me-system
@@ -293,16 +293,13 @@ EOF
 kubectl get certificate -n cleanbrain-me-system -w
 ```
 
-Once applied, cert-manager should auto-create `cleanbrain-me-entrance-tls`
-and issue it via HTTP-01 -- the apex A record is already confirmed
-pointing at this server (see "DNS" above), so validation should succeed
-without further action. **This listener addition had not actually been
-applied yet as of first writing this section** -- an earlier version of
-this document incorrectly stated it had been; confirm with `kubectl get
-certificate -n cleanbrain-me-system` and `kubectl get gateway
-cleanbrain-me-gateway -n cleanbrain-me-system -o yaml` before trusting
-either this text or `kubernetes/apps/entrance/httproute.yaml`'s comment
-about it.
+Applying this auto-created `cleanbrain-me-entrance-tls` and issued it via
+HTTP-01 within about 35 seconds (the apex A record was already confirmed
+pointing at this server -- see "DNS" above -- so validation succeeded
+immediately). Confirmed end to end: `kubectl get certificate -n
+cleanbrain-me-system` shows `cleanbrain-me-entrance-tls` as `READY: True`,
+and `curl -I https://cleanbrain.me` returns `HTTP/2 200` served by the
+`web` Deployment's nginx.
 
 **Note for future services**: this same "add a listener, cert-manager
 issues automatically" step is the real, general procedure for any new
@@ -326,10 +323,9 @@ API token) has been introduced. See "Naming conventions" below for how
 `kioti.cleanbrain.me` is used as a namespace for multiple future services
 without adding that complexity.
 
-`english-core-speaking`'s certificate is confirmed issued and `Ready`.
-`cleanbrain-me-entrance`'s is not yet issued as of this writing -- see "How
-a TLS Secret actually gets created" above for why and the exact step still
-needed. `kioti-crm-discount`'s is not currently confirmed either -- see the
+`english-core-speaking`'s and `cleanbrain-me-entrance`'s certificates are
+confirmed issued and `Ready` (see "How a TLS Secret actually gets created"
+above). `kioti-crm-discount`'s is not currently confirmed -- see the
 discrepancy noted above.
 
 ### ACME HTTP-01 implementation
@@ -608,15 +604,18 @@ first, so `deployment.yaml`'s `:latest` tag exists in GHCR before bootstrap
 has already been done; the first Actions run (`test` + `build-and-push`)
 succeeded.
 
-DNS is resolved (the apex A record already existed). TLS still needs the
-Gateway listener addition in "TLS" > "How a TLS Secret actually gets
-created" above applied before `https://cleanbrain.me` will serve a valid
-certificate -- confirm `cleanbrain-me-entrance-tls` is `Ready` in
-`cleanbrain-me-system` before or shortly after the steps below (the
-Deployment/Service/HTTPRoute below don't depend on it to apply, only on it
-to actually work over HTTPS).
+DNS and TLS are both resolved and confirmed working end to end: the apex A
+record already existed, and `cleanbrain-me-entrance-tls` was issued by
+adding the Gateway listener in "TLS" > "How a TLS Secret actually gets
+created" above. `https://cleanbrain.me` is live (verified with `curl -I`
+returning `HTTP/2 200`).
 
 ## 1. Namespace, RBAC, Deployment, Service, HTTPRoute
+
+All of the below has been completed and verified: `pod/web` is
+`Running 1/1`, `service/web` exists, `httproute/entrance` shows
+`Accepted: True` / `ResolvedRefs: True`, and the site serves successfully
+over HTTPS.
 
 ```bash
 kubectl apply -f \

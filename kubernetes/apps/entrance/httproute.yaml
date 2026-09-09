@@ -3,14 +3,14 @@
 # cert-manager, or ClusterIssuer.
 #
 # TLS: this hostname is the bare apex domain (cleanbrain.me), not a
-# *.cleanbrain.me subdomain, so it needs its own HTTPS listener on the live
-# Gateway (not tracked in this repository -- see README.md "Networking" >
-# "Gateway") referencing a cleanbrain-me-entrance-tls Secret. This route
-# applies fine on its own, but HTTPS won't actually serve a valid
-# certificate for cleanbrain.me until that listener exists -- cert-manager
-# then auto-issues the certificate via its Gateway API integration. See
+# *.cleanbrain.me subdomain, so it needed its own HTTPS listener on the
+# live Gateway (not tracked in this repository -- see README.md
+# "Networking" > "Gateway") referencing a cleanbrain-me-entrance-tls
+# Secret. That listener has been added and cert-manager auto-issued the
+# certificate via its Gateway API integration -- confirmed working
+# end to end (curl https://cleanbrain.me returns HTTP/2 200). See
 # README.md "TLS" > "How a TLS Secret actually gets created" for the
-# confirmed mechanism and the exact listener to add.
+# mechanism and exact listener that was applied.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
