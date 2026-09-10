@@ -148,6 +148,7 @@ name: http                          port: 8000  protocol: HTTP   (no hostname re
 name: english-core-speaking-https   port: 8443  protocol: HTTPS  hostname: english-core-speaking.cleanbrain.me
 name: entrance-https                port: 8443  protocol: HTTPS  hostname: cleanbrain.me
 name: kioti-crm-discount-https       port: 8443  protocol: HTTPS  hostname: crm-discount.kioti.cleanbrain.me  (added 2026-09-09, see discrepancy note below)
+name: relayhub-java-https            port: 8443  protocol: HTTPS  hostname: relayhub-java.developer.cleanbrain.me  (added 2026-09-11 via kubectl patch, see "relayhub-java" below)
 ```
 
 Applications must **not recreate the Gateway**.
@@ -368,9 +369,11 @@ API token) has been introduced. See "Naming conventions" below for how
 `kioti.cleanbrain.me` is used as a namespace for multiple future services
 without adding that complexity.
 
-All three current certificates (`english-core-speaking`, `cleanbrain-me-entrance`,
-`kioti-crm-discount`) are confirmed issued and `Ready` -- see the update
-above for `kioti-crm-discount`'s.
+All four current certificates (`english-core-speaking`, `cleanbrain-me-entrance`,
+`kioti-crm-discount`, `relayhub-java`) are confirmed issued and `Ready` --
+see the update above for `kioti-crm-discount`'s, and "relayhub-java" >
+"First-time deployment" below for `relayhub-java`'s (which hit the exact
+same missed-listener symptom on its own first deployment).
 
 ### ACME HTTP-01 implementation
 
@@ -418,13 +421,15 @@ Current application hostnames:
 ```text
 english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
+relayhub-java.developer.cleanbrain.me
 ```
 
-`relayhub-java.developer.cleanbrain.me` is **not yet in this list** -- see
-"relayhub-java" > "First-time deployment" above. It needs a new record
-(either a single A record for that hostname, or a `*.developer.cleanbrain.me`
-wildcard) added before deployment, unlike every hostname above which already
-resolves.
+`relayhub-java.developer.cleanbrain.me` resolves and is issued (confirmed
+2026-09-11: DNS resolves to the Hetzner public IP, and `openssl s_client`
+shows a real Let's Encrypt certificate, not Traefik's self-signed default
+-- see "relayhub-java" > "First-time deployment" above for the DNS record
+and Gateway listener steps that got it there). It's the first hostname
+under the `developer.cleanbrain.me` subdomain namespace.
 
 `cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain. An A record for the apex, pointing at the Hetzner public IP, already exists (confirmed 2026-09-09) -- unlike the TLS certificate for that hostname, DNS is not a blocker for this service (see "TLS" above for the remaining open item).
 
@@ -1102,13 +1107,58 @@ all.
 **Also required, same as every other app here:** the `HTTPRoute` above does
 not by itself get this hostname a real TLS certificate. Add a Gateway
 listener for `relayhub-java.developer.cleanbrain.me` -- see "Adding a new
-hostname to the shared Gateway" above -- and confirm the
-`cleanbrain-me-relayhub-java-tls` Certificate reaches `READY: True` before
-testing externally.
+hostname to the shared Gateway" above for the general mechanism -- and
+confirm the `cleanbrain-me-relayhub-java-tls` Certificate reaches
+`READY: True` before testing externally.
+
+Unlike `cleanbrain-me-entrance`'s equivalent step (which shows a full
+`kubectl apply -f -` reissuing the entire Gateway object, because the
+Gateway itself isn't tracked as a file anywhere in this repo -- see
+"Networking" > "Gateway" above), unless you already have the live Gateway's
+full current YAML in hand, retyping every existing listener by hand risks
+dropping one. Append with a JSON patch instead -- it only touches the
+listeners array, so every existing listener is left exactly as-is with no
+risk of a copy/paste mistake overwriting one:
+
+```bash
+kubectl patch gateway cleanbrain-me-gateway -n cleanbrain-me-system --type=json -p '[
+  {
+    "op": "add",
+    "path": "/spec/listeners/-",
+    "value": {
+      "name": "relayhub-java-https",
+      "hostname": "relayhub-java.developer.cleanbrain.me",
+      "port": 8443,
+      "protocol": "HTTPS",
+      "tls": {
+        "mode": "Terminate",
+        "certificateRefs": [
+          { "kind": "Secret", "name": "cleanbrain-me-relayhub-java-tls" }
+        ]
+      },
+      "allowedRoutes": {
+        "namespaces": { "from": "All" }
+      }
+    }
+  }
+]'
+
+kubectl get certificate -n cleanbrain-me-system -w
+```
+
+Confirmed working this way (2026-09-11): `cleanbrain-me-relayhub-java-tls`
+reached `READY: True` within about a minute, and `openssl s_client` from
+outside the cluster showed `issuer=... O = Let's Encrypt` (not Traefik's
+self-signed default cert -- the same missed-listener symptom this app's own
+first deployment hit, exactly as documented for `kioti-crm-discount` above:
+`HTTPRoute` was healthy, DNS resolved, TCP connected on 443, but the TLS
+handshake presented `TRAEFIK DEFAULT CERT` until this patch was applied).
 
 Verify the same way as `english-core-speaking` ("Deployment verification"
 below), substituting the namespace and hostname, plus the additional health
-check `curl https://relayhub-java.developer.cleanbrain.me/actuator/health`.
+check `curl https://relayhub-java.developer.cleanbrain.me/actuator/health`
+-- confirmed live (2026-09-11): returns `{"status":"UP", ...}` with the `db`
+component also `UP`.
 
 ---
 
