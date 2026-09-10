@@ -1,11 +1,24 @@
-# Single-node KRaft broker (no Zookeeper, no PVC) — same apache/kafka:3.8.0 image and
-# no-extra-env-vars approach relayhub-java's own docker-compose.yml uses for local dev; that
-# image's default single-node config just works. A plain Deployment (not StatefulSet) is
-# deliberate: this is a personal-scale demo, losing broker data on a restart just means any
-# Kafka-committed-but-unconsumed delivery task is lost (the Outbox row was already marked
-# PUBLISHED) — an accepted, already-documented gap, same risk class as relayhub-java's own
-# "Outbox row cleanup/archival is unaddressed" note. Not worth a PVC + StatefulSet on a
-# 4GB-RAM shared server for this.
+# Single-node KRaft broker (no Zookeeper, no PVC) — same apache/kafka:3.8.0 image
+# relayhub-java's own docker-compose.yml uses for local dev. A plain Deployment (not
+# StatefulSet) is deliberate: this is a personal-scale demo, losing broker data on a restart
+# just means any Kafka-committed-but-unconsumed delivery task is lost (the Outbox row was
+# already marked PUBLISHED) — an accepted, already-documented gap, same risk class as
+# relayhub-java's own "Outbox row cleanup/archival is unaddressed" note. Not worth a PVC +
+# StatefulSet on a 4GB-RAM shared server for this.
+#
+# KAFKA_ADVERTISED_LISTENERS is NOT optional here, unlike docker-compose. The image's default
+# (advertised.listeners=PLAINTEXT://localhost:9092) only happened to work locally because the
+# app ran on the host with port 9092 published to it — "localhost" genuinely was the broker
+# from the app's point of view. In-cluster, the api Pod's producer/consumer connects fine to
+# the "kafka" Service for its *first* request (metadata fetch), but the broker then tells it
+# to reconnect to "localhost:9092" for actual produce/consume — which resolves to the api Pod
+# itself, not the kafka Pod, and every publish silently fails forever
+# (relayhub_outbox_publish_failed_total climbing with zero relayhub_delivery_* metrics ever
+# appearing is the exact symptom this hit on first deployment, 2026-09-11). Overriding just
+# this one property (env var naming: KAFKA_<PROPERTY_WITH_DOTS_AS_UNDERSCORES>, per
+# https://github.com/apache/kafka/blob/trunk/docker/examples/README.md) to the in-cluster
+# Service DNS name fixes it without disturbing any of the image's other single-node KRaft
+# defaults (cluster ID, node id, controller quorum voters, etc. all still self-generated).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,6 +44,10 @@ spec:
             # the image's default heap sizing is more generous than this shared server can spare.
             - name: KAFKA_HEAP_OPTS
               value: "-Xms384m -Xmx384m"
+            # See the file-level comment above — must be the in-cluster Service name, not the
+            # image's own "localhost" default.
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka:9092"
           resources:
             requests:
               cpu: 100m
