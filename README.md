@@ -1285,9 +1285,25 @@ Required values:
 | `SPRING_DATASOURCE_URL`      | `api`'s JDBC URL -- must point at the in-cluster `postgres` Service |
 | `SPRING_DATASOURCE_USERNAME` | Must match `POSTGRES_USER`                                 |
 | `SPRING_DATASOURCE_PASSWORD` | Must match `POSTGRES_PASSWORD`                              |
+| `ADMIN_USERNAME`             | relayhub-java's own admin console (Spec 005) login -- gates every write under `/api/**` |
+| `ADMIN_PASSWORD`             | Same -- **must** override the app's `admin/admin` local-dev default; that hostname is public |
 
 No external third-party credentials (no OAuth, no Salesforce) -- this app
 has no such integration yet.
+
+**Upgrading an already-deployed relayhub-java Secret for Spec 005:** `ADMIN_USERNAME`/
+`ADMIN_PASSWORD` were added after this app's first deployment -- if `secret.yaml` predates them,
+add both keys (`openssl rand -base64 24` for the password) and re-apply:
+
+```bash
+kubectl apply -f kubernetes/apps/relayhub-java/secret.yaml
+kubectl -n cleanbrain-me-relayhub-java rollout restart deployment/api
+```
+
+`kubectl apply` on a Secret updates in place; existing Postgres data and other keys are untouched.
+Do this **before** rolling out the Spec 005 image -- deploying the admin console with the
+default credentials still in effect means every write endpoint is effectively unauthenticated
+against a public hostname.
 
 ### Google OAuth
 
