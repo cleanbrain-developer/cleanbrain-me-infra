@@ -6,19 +6,30 @@
 # relayhub-java's own "Outbox row cleanup/archival is unaddressed" note. Not worth a PVC +
 # StatefulSet on a 4GB-RAM shared server for this.
 #
-# KAFKA_ADVERTISED_LISTENERS is NOT optional here, unlike docker-compose. The image's default
-# (advertised.listeners=PLAINTEXT://localhost:9092) only happened to work locally because the
-# app ran on the host with port 9092 published to it — "localhost" genuinely was the broker
-# from the app's point of view. In-cluster, the api Pod's producer/consumer connects fine to
-# the "kafka" Service for its *first* request (metadata fetch), but the broker then tells it
-# to reconnect to "localhost:9092" for actual produce/consume — which resolves to the api Pod
-# itself, not the kafka Pod, and every publish silently fails forever
-# (relayhub_outbox_publish_failed_total climbing with zero relayhub_delivery_* metrics ever
-# appearing is the exact symptom this hit on first deployment, 2026-09-11). Overriding just
-# this one property (env var naming: KAFKA_<PROPERTY_WITH_DOTS_AS_UNDERSCORES>, per
-# https://github.com/apache/kafka/blob/trunk/docker/examples/README.md) to the in-cluster
-# Service DNS name fixes it without disturbing any of the image's other single-node KRaft
-# defaults (cluster ID, node id, controller quorum voters, etc. all still self-generated).
+# Every KAFKA_* env var below except KAFKA_HEAP_OPTS is required TOGETHER, not just
+# KAFKA_ADVERTISED_LISTENERS on its own — this was learned the hard way (2026-09-11): setting
+# only KAFKA_ADVERTISED_LISTENERS crashed the broker at startup with "Missing required
+# configuration `zookeeper.connect`". The image's docker-entrypoint only auto-generates a full
+# working single-node KRaft config (including this same "PLAINTEXT://localhost:9092"
+# advertised-listener default that's wrong for Kubernetes — see below) when it sees ZERO
+# KAFKA_-prefixed env vars; supplying even one switches it to "you provide the whole KRaft
+# bootstrap config yourself" mode, and without KAFKA_PROCESS_ROLES it can't tell this apart
+# from legacy Zookeeper mode. The full set below is adapted from Apache Kafka's own official
+# example (docker/examples/docker-compose-files/single-node/plaintext/docker-compose.yml),
+# collapsed to a single PLAINTEXT listener (that example's separate PLAINTEXT_HOST listener is
+# for host-machine access, not needed here — everything reaching this broker is in-cluster).
+#
+# The actual bug being fixed: advertised.listeners defaulting to "localhost:9092" only worked
+# in docker-compose because the app ran on the host with port 9092 published to it —
+# "localhost" genuinely was the broker from the app's point of view there. In-cluster, the api
+# Pod's producer/consumer connects fine to the "kafka" Service for its *first* request (metadata
+# fetch), but the broker then tells it to reconnect to "localhost:9092" for actual
+# produce/consume — which resolves to the api Pod itself, not the kafka Pod, and every publish
+# silently fails forever (relayhub_outbox_publish_failed_total climbing with zero
+# relayhub_delivery_* metrics ever appearing was the exact symptom this hit on first
+# deployment). KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 is also required on a single broker —
+# the default of 3 would leave __consumer_offsets uncreatable and the delivery-worker consumer
+# group unable to function, independent of the advertised-listener issue.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,10 +55,32 @@ spec:
             # the image's default heap sizing is more generous than this shared server can spare.
             - name: KAFKA_HEAP_OPTS
               value: "-Xms384m -Xmx384m"
-            # See the file-level comment above — must be the in-cluster Service name, not the
-            # image's own "localhost" default.
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:9092,CONTROLLER://:9093"
             - name: KAFKA_ADVERTISED_LISTENERS
               value: "PLAINTEXT://kafka:9092"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka:9093"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_LOG_DIRS
+              value: "/tmp/kraft-combined-logs"
           resources:
             requests:
               cpu: 100m
