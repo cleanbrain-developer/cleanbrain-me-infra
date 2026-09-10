@@ -11,6 +11,7 @@ Current application repositories:
 - [`english-core-speaking`](https://github.com/cleanbrain-developer/english-core-speaking)
 - [`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private repository)
 - [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
+- [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) + [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) (two repositories, one namespace/deployment — see "relayhub-java" below)
 
 ---
 
@@ -419,6 +420,12 @@ english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 ```
 
+`relayhub-java.developer.cleanbrain.me` is **not yet in this list** -- see
+"relayhub-java" > "First-time deployment" above. It needs a new record
+(either a single A record for that hostname, or a `*.developer.cleanbrain.me`
+wildcard) added before deployment, unlike every hostname above which already
+resolves.
+
 `cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain. An A record for the apex, pointing at the Hetzner public IP, already exists (confirmed 2026-09-09) -- unlike the TLS certificate for that hostname, DNS is not a blocker for this service (see "TLS" above for the remaining open item).
 
 `kioti.cleanbrain.me` is a dedicated subdomain namespace for KIOTI-related
@@ -499,6 +506,18 @@ it gets a real certificate -- see "Adding a new hostname to the shared
 Gateway" above. This was originally missed for `kioti-crm-discount`'s own
 first deployment; do not assume a new `HTTPRoute` alone is enough.
 
+### `developer.cleanbrain.me` subdomain namespace
+
+Same pattern as `kioti.cleanbrain.me`, introduced for `relayhub-java`: a
+DNS-level grouping (not a Kubernetes namespace) for `relayhub-<lang>`
+sibling services per that repo's own ADR-0002 (`relayhub-java` today,
+possibly a `relayhub-node` etc. later). Unlike `kioti.cleanbrain.me`, this
+one has **no wildcard DNS record yet** -- it needs to be created (or a
+single non-wildcard record added) as part of `relayhub-java`'s first
+deployment; see "DNS" above and "relayhub-java" > "First-time deployment".
+Each service under it still gets its own `cleanbrain-me-<service-name>`
+namespace and its own Gateway listener, same as `kioti.cleanbrain.me`.
+
 ---
 
 # Repository layout
@@ -508,7 +527,8 @@ kubernetes/
 ├── namespaces/
 │   ├── cleanbrain-me-english-core-speaking.yaml
 │   ├── cleanbrain-me-kioti-crm-discount.yaml
-│   └── cleanbrain-me-entrance.yaml
+│   ├── cleanbrain-me-entrance.yaml
+│   └── cleanbrain-me-relayhub-java.yaml
 │
 └── apps/
     ├── english-core-speaking/
@@ -537,11 +557,33 @@ kubernetes/
     │   ├── service.yaml
     │   └── httproute.yaml
     │
-    └── entrance/
-        ├── rbac.yaml
-        ├── deployment.yaml
-        ├── service.yaml
-        └── httproute.yaml
+    ├── entrance/
+    │   ├── rbac.yaml
+    │   ├── deployment.yaml
+    │   ├── service.yaml
+    │   └── httproute.yaml
+    │
+    └── relayhub-java/
+        ├── secret.example.yaml
+        ├── rbac.yaml            # two ServiceAccounts — see "relayhub-java" above
+        ├── httproute.yaml
+        │
+        ├── postgres/
+        │   ├── statefulset.yaml
+        │   └── service.yaml
+        │
+        ├── kafka/
+        │   ├── deployment.yaml
+        │   └── service.yaml
+        │
+        ├── api/
+        │   ├── configmap.yaml
+        │   ├── deployment.yaml
+        │   └── service.yaml
+        │
+        └── demo-systems/        # no httproute — internal-only
+            ├── deployment.yaml
+            └── service.yaml
 ```
 
 Plain Kubernetes manifests are used initially.
@@ -903,6 +945,173 @@ below), substituting the namespace and hostname.
 
 ---
 
+## relayhub-java
+
+Source repositories (two, deploying into the **same** namespace -- see
+"Runtime" below):
+
+- [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) -- the product itself, an event-driven data integration platform
+- [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) -- a simulator that continuously generates demo traffic into it and demonstrates DLQ activity via a deliberately flaky Target
+
+### Runtime
+
+```text
+Namespace:
+  cleanbrain-me-relayhub-java
+
+Hostname:
+  relayhub-java.developer.cleanbrain.me
+```
+
+Application components:
+
+```text
+api            -- relayhub-java itself (Spring Boot, port 8080)
+postgres       -- relayhub-java's database (StatefulSet, PVC)
+kafka          -- single-node KRaft broker, no PVC (see kafka/deployment.yaml)
+demo-systems   -- relayhub-demo-systems (Node.js/Express, port 9500), internal-only
+```
+
+Two different repositories each own one Deployment here (`api` from
+`relayhub-java`, `demo-systems` from `relayhub-demo-systems`) -- this is the
+only application in this cluster where that's true. See "CI deployment
+identity" > RBAC below for how their two CI pipelines stay scoped to only
+their own Deployment despite sharing a namespace.
+
+Routing:
+
+```text
+/*  -> api:8080
+```
+
+`demo-systems` has no `HTTPRoute` -- it's only called in-cluster, by
+`api`'s seeded Delivery Targets (`RELAYHUB_DEMO_SIMULATOR_BASE_URL=http://demo-systems:9500`,
+see `api/configmap.yaml`). `demo-systems` in turn calls back into `api` at
+`RELAYHUB_BASE_URL=http://api:8080` to generate its continuous demo
+traffic -- the two Deployments call each other over the in-cluster network.
+
+Container images:
+
+```text
+ghcr.io/cleanbrain-developer/relayhub-java
+ghcr.io/cleanbrain-developer/relayhub-demo-systems
+```
+
+Both public, matching `english-core-speaking`/`cleanbrain-me-entrance` (see
+"GHCR image pull authentication" below). Application deployments should use
+immutable Git commit SHA image tags; `:latest` is also published for
+convenience/bootstrap, same convention as every other app here.
+
+`relayhub-java`'s own `application.yml` hardcodes `localhost` for
+Postgres/Kafka/Zipkin -- **no code change was needed** to make this
+deployable: Spring Boot's environment-variable relaxed binding already
+takes precedence over `application.yml`, so `api/configmap.yaml` and
+`secret.example.yaml` override everything needed
+(`SPRING_DATASOURCE_URL`, `SPRING_KAFKA_BOOTSTRAP_SERVERS`,
+`MANAGEMENT_TRACING_SAMPLING_PROBABILITY=0`) purely via container env vars.
+Verified locally before writing these manifests: `docker run` with only
+env var overrides (no source edit) connected to a real Postgres+Kafka and
+started cleanly.
+
+The `demo` Spring profile is always active in production
+(`SPRING_PROFILES_ACTIVE=demo` in `api/configmap.yaml`) -- `DemoDataSeeder`
+is idempotent and safe to run on every cold start, and this is what gives
+`demo-systems` something to talk to and the eventual developer-site
+dashboard something to show. There is deliberately no Prometheus/Grafana/
+Zipkin here -- that stack stays local-dev-only (see `relayhub-java`'s own
+`docs/status/current-state.md`), consistent with this repo's own principle
+of not introducing cluster-wide observability infrastructure for one
+service (see "Resource budget" below and this file's project instructions).
+
+### First-time deployment
+
+Prerequisite: push both `relayhub-java`'s and `relayhub-demo-systems`'
+`master` branches at least once first, so both `deployment.yaml` files'
+`:latest` tags exist in GHCR before bootstrap (same reasoning as
+`english-core-speaking` above).
+
+```bash
+kubectl apply -f \
+  kubernetes/namespaces/cleanbrain-me-relayhub-java.yaml
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/rbac.yaml
+```
+
+Create the Secret (see "Secrets" below), then:
+
+```bash
+cp \
+  kubernetes/apps/relayhub-java/secret.example.yaml \
+  kubernetes/apps/relayhub-java/secret.yaml
+# edit secret.yaml with real values, never commit it
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/secret.yaml
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/postgres/statefulset.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/postgres/service.yaml
+
+kubectl -n cleanbrain-me-relayhub-java \
+  rollout status statefulset/postgres --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/kafka/deployment.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/kafka/service.yaml
+
+kubectl -n cleanbrain-me-relayhub-java \
+  rollout status deployment/kafka --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/api/configmap.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/api/deployment.yaml
+
+kubectl -n cleanbrain-me-relayhub-java \
+  rollout status deployment/api --timeout=180s
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/api/service.yaml
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/demo-systems/deployment.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/demo-systems/service.yaml
+
+kubectl -n cleanbrain-me-relayhub-java \
+  rollout status deployment/demo-systems --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/httproute.yaml
+```
+
+**DNS, not just TLS, is unresolved for this one** -- unlike every other app
+in this repo, `relayhub-java.developer.cleanbrain.me` is the *first*
+hostname ever put under a `developer.cleanbrain.me` subdomain, so (unlike
+`kioti.cleanbrain.me`'s existing wildcard) no DNS record covers it yet. Add
+either a single `relayhub-java.developer` A record or a
+`*.developer.cleanbrain.me` wildcard (if more `relayhub-<lang>` sibling
+repos are actually expected soon -- see that repo's ADR-0002) in Cloudflare
+DNS (Proxy: DNS Only, same as every other record here) pointing at the
+Hetzner public IP, **before** expecting the `HTTPRoute` below to resolve at
+all.
+
+**Also required, same as every other app here:** the `HTTPRoute` above does
+not by itself get this hostname a real TLS certificate. Add a Gateway
+listener for `relayhub-java.developer.cleanbrain.me` -- see "Adding a new
+hostname to the shared Gateway" above -- and confirm the
+`cleanbrain-me-relayhub-java-tls` Certificate reaches `READY: True` before
+testing externally.
+
+Verify the same way as `english-core-speaking` ("Deployment verification"
+below), substituting the namespace and hostname, plus the additional health
+check `curl https://relayhub-java.developer.cleanbrain.me/actuator/health`.
+
+---
+
 ## PostgreSQL
 
 PostgreSQL runs as a single-replica StatefulSet.
@@ -1002,6 +1211,34 @@ but git history still contains the old values -- treat that client
 secret/password as burned and issue new ones from the Salesforce connected
 app before relying on this in production.
 
+### relayhub-java
+
+Template:
+
+```text
+kubernetes/apps/relayhub-java/secret.example.yaml
+```
+
+Local production file:
+
+```text
+kubernetes/apps/relayhub-java/secret.yaml
+```
+
+Required values:
+
+| Key                          | Purpose                                                    |
+| ----------------------------- | ----------------------------------------------------------- |
+| `POSTGRES_DB`                | PostgreSQL database (also consumed directly by the `postgres` container) |
+| `POSTGRES_USER`              | PostgreSQL user (also consumed directly by the `postgres` container) |
+| `POSTGRES_PASSWORD`          | PostgreSQL password (also consumed directly by the `postgres` container) |
+| `SPRING_DATASOURCE_URL`      | `api`'s JDBC URL -- must point at the in-cluster `postgres` Service |
+| `SPRING_DATASOURCE_USERNAME` | Must match `POSTGRES_USER`                                 |
+| `SPRING_DATASOURCE_PASSWORD` | Must match `POSTGRES_PASSWORD`                              |
+
+No external third-party credentials (no OAuth, no Salesforce) -- this app
+has no such integration yet.
+
 ### Google OAuth
 
 Google Cloud Console must contain the production redirect URI:
@@ -1080,6 +1317,17 @@ Use a GitHub Personal Access Token scoped to `read:packages` only, not the
 scoped to the Actions run, not usable here). If this package is ever made
 public, this Secret and the `imagePullSecrets` entry can both be removed,
 mirroring `english-core-speaking`'s current setup.
+
+## relayhub-java + relayhub-demo-systems: public packages
+
+Both packages are public, same reasoning as `english-core-speaking`:
+
+```text
+ghcr.io/cleanbrain-developer/relayhub-java
+ghcr.io/cleanbrain-developer/relayhub-demo-systems
+```
+
+No `imagePullSecrets` on either Deployment.
 
 ---
 
@@ -2513,20 +2761,28 @@ Current application resource targets:
 | english-core-speaking/web      |         50m |           32Mi |      200m |         64Mi |
 | kioti-crm-discount/app         |        150m |          256Mi |      500m |        512Mi |
 | entrance/web                   |         50m |           32Mi |      200m |         64Mi |
-| **Total**                      |    **600m** |      **704Mi** | **2400m** |   **1408Mi** |
+| relayhub-java/postgres         |        100m |          128Mi |      500m |        384Mi |
+| relayhub-java/kafka            |        100m |          384Mi |      500m |        768Mi |
+| relayhub-java/api              |        250m |          256Mi |     1000m |        640Mi |
+| relayhub-java/demo-systems     |         50m |           64Mi |      200m |        160Mi |
+| **Total**                      |   **1100m** |     **1536Mi** | **4600m** |  **3360Mi** |
 
-The combined CPU **limit** total (2400m) exceeds the box's 2 vCPU (2000m)
-capacity, and by a larger margin than before `entrance/web` was added --
-this is the "third similarly-sized service" scenario this section already
-warned about. This is still expected and not itself a problem -- limits are
-ceilings per Pod, not reservations, and all workloads hitting their limit
-simultaneously at once is unlikely for these low-traffic apps -- but there
-is now no slack left at all for a further service without raising the VM
-spec or tightening existing limits. Requests (600m / 704Mi) are what the
-scheduler actually reserves and stay comfortably inside budget. Re-check
-with `kubectl top nodes` / `kubectl top pods -A` after `entrance/web`'s
-first-time deployment, and before adding another `kioti-*` test service or
-any other new service under this same namespace strategy.
+**relayhub-java is the largest single addition to this budget so far** --
+its four workloads alone add 500m/832Mi requests and 2200m/1952Mi limits,
+because it's the first app here running a JVM process and a Kafka broker
+side by side. The combined CPU **limit** total (4600m) is now more than
+double the box's 2 vCPU (2000m) capacity -- still not itself a problem for
+the same reason noted before (limits are ceilings, not reservations, and
+simultaneous saturation across every low-traffic Pod here is unlikely), but
+the margin for that assumption is thinner than it was. Memory is the
+number to actually watch: requests (1536Mi) still leave headroom under the
+4Gi box once K3s/Traefik/cert-manager/system overhead is subtracted, but
+there is little left for anything beyond that. **Run `kubectl top nodes` /
+`kubectl top pods -A` after relayhub-java's first-time deployment** and
+before adding any further service under this budget -- if memory pressure
+shows up, `relayhub-java/kafka`'s `KAFKA_HEAP_OPTS` and `relayhub-java/api`'s
+`JAVA_TOOL_OPTIONS`/limits are the two knobs sized specifically to be
+tightened first (see their own manifest comments).
 
 This leaves capacity for:
 

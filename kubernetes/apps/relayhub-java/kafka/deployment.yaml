@@ -1,0 +1,40 @@
+# Single-node KRaft broker (no Zookeeper, no PVC) — same apache/kafka:3.8.0 image and
+# no-extra-env-vars approach relayhub-java's own docker-compose.yml uses for local dev; that
+# image's default single-node config just works. A plain Deployment (not StatefulSet) is
+# deliberate: this is a personal-scale demo, losing broker data on a restart just means any
+# Kafka-committed-but-unconsumed delivery task is lost (the Outbox row was already marked
+# PUBLISHED) — an accepted, already-documented gap, same risk class as relayhub-java's own
+# "Outbox row cleanup/archival is unaddressed" note. Not worth a PVC + StatefulSet on a
+# 4GB-RAM shared server for this.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.8.0
+          ports:
+            - containerPort: 9092
+          env:
+            # Caps the JVM heap so this single broker stays well inside its memory limit below —
+            # the image's default heap sizing is more generous than this shared server can spare.
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xms384m -Xmx384m"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi

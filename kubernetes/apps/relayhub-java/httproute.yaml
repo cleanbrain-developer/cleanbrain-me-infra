@@ -1,0 +1,27 @@
+# Attaches to the pre-existing shared Gateway in cleanbrain-me-system. Does NOT create the
+# Gateway, cert-manager, ClusterIssuer, or TLS Certificate. Per relayhub-java's own ADR-0002
+# naming convention (repo relayhub-<lang>, hostname relayhub-<lang>.developer.cleanbrain.me), this
+# is the FIRST hostname under the developer.cleanbrain.me subdomain namespace -- unlike
+# kioti.cleanbrain.me, no wildcard DNS record exists for it yet, so a DNS record (or wildcard, if
+# more relayhub-<lang> siblings are expected soon) must be added before this route can resolve at
+# all, in addition to the usual Gateway-listener step below. demo-systems has no route here — see
+# its own Service comment.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: relayhub-java
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  parentRefs:
+    - name: cleanbrain-me-gateway
+      namespace: cleanbrain-me-system
+  hostnames:
+    - relayhub-java.developer.cleanbrain.me
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: api
+          port: 8080

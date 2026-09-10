@@ -1,0 +1,76 @@
+# Least-privilege identities for the two separate GitHub Actions SSH deploy bridges that both
+# target this ONE namespace: relayhub-java's .github/workflows/ci.yml (deployment/api) and
+# relayhub-demo-systems' .github/workflows/deploy.yml (deployment/demo-systems). Unlike every
+# other app in this repo, these are two different source repositories deploying into the same
+# namespace, so they get two distinct ServiceAccounts (names must be unique within a namespace
+# anyway) each scoped by resourceNames to only the one Deployment its own CI owns — CI for one
+# repo structurally cannot touch the other's Deployment, even though they share a namespace. See
+# README.md "Multi-application kubeconfig on the deploy host" for why both need an explicit
+# --context on every kubectl call instead of relying on current-context.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer-relayhub-java
+  namespace: cleanbrain-me-relayhub-java
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer-relayhub-java
+  namespace: cleanbrain-me-relayhub-java
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer-relayhub-java
+  namespace: cleanbrain-me-relayhub-java
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer-relayhub-java
+    namespace: cleanbrain-me-relayhub-java
+roleRef:
+  kind: Role
+  name: ci-deployer-relayhub-java
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer-relayhub-demo-systems
+  namespace: cleanbrain-me-relayhub-java
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer-relayhub-demo-systems
+  namespace: cleanbrain-me-relayhub-java
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["demo-systems"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer-relayhub-demo-systems
+  namespace: cleanbrain-me-relayhub-java
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer-relayhub-demo-systems
+    namespace: cleanbrain-me-relayhub-java
+roleRef:
+  kind: Role
+  name: ci-deployer-relayhub-demo-systems
+  apiGroup: rbac.authorization.k8s.io

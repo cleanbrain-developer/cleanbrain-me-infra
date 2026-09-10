@@ -1,0 +1,14 @@
+# Internal only — no HTTPRoute. RelayHub's Deliveries reach this Service in-cluster (it's what
+# the demo-flightstatus Targets' baseUrl resolves to), and nothing outside the namespace needs to
+# call it directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-systems
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  selector:
+    app: demo-systems
+  ports:
+    - port: 9500
+      targetPort: 9500

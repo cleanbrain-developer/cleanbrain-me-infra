@@ -1,0 +1,23 @@
+# SPRING_PROFILES_ACTIVE=demo enables DemoDataSeeder (idempotent, safe to re-apply/restart) so
+# the deployed instance always has the flight-status demo scenario registered for
+# relayhub-demo-systems to drive. SPRING_KAFKA_BOOTSTRAP_SERVERS and
+# RELAYHUB_DEMO_SIMULATOR_BASE_URL point at the in-cluster Service names below instead of
+# relayhub-java's own application.yml defaults (localhost:9092 / localhost:9500) — Spring Boot's
+# environment-variable relaxed binding overrides application.yml automatically, no code change
+# needed. MANAGEMENT_TRACING_SAMPLING_PROBABILITY=0 disables tracing export entirely: there is no
+# Zipkin in this namespace (the observability stack stays local-dev-only, see relayhub-java's
+# docs/status/current-state.md) and a nonzero probability would just fail every export call.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: cleanbrain-me-relayhub-java
+data:
+  SPRING_PROFILES_ACTIVE: demo
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0"
+  RELAYHUB_DEMO_SIMULATOR_BASE_URL: http://demo-systems:9500
+  TZ: Asia/Seoul
+  # Java's own container-aware default (25% of the container memory limit) is too conservative
+  # for a Spring Boot + Hibernate + Kafka client footprint at this container's memory limit.
+  JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0

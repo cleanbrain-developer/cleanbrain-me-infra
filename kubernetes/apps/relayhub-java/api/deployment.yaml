@@ -1,0 +1,53 @@
+# :latest here is a real, pullable tag by the time you bootstrap -- NOT a placeholder -- because
+# ci.yml's build-and-push job publishes both :latest and :<git-sha> on every push to master
+# regardless of whether ENABLE_PRODUCTION_DEPLOY is set. This only holds if you push to master at
+# least once BEFORE running "First-time deployment" in the README (see english-core-speaking's
+# section for the same reasoning). Ongoing deploys update the running Deployment's image via
+# `kubectl set image` from CI with the immutable :<git-sha> tag and do NOT rewrite this file --
+# re-applying it as-is after a CI deploy will roll the cluster back to :latest as of that apply.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/cleanbrain-developer/relayhub-java:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: api-config
+            - secretRef:
+                name: app-secrets
+          # Generous initial delay: Flyway applies migrations and DemoDataSeeder registers the
+          # demo scenario before the app starts listening — both happen once on every cold start.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 640Mi

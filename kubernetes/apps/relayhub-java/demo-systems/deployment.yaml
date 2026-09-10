@@ -1,0 +1,47 @@
+# :latest here is a real, pullable tag by the time you bootstrap -- see api/deployment.yaml's
+# comment for the same reasoning (push relayhub-demo-systems' master at least once first).
+# RELAYHUB_BASE_URL points at the in-cluster "api" Service (not host.docker.internal, which only
+# made sense for the local docker-compose setup where the app ran on the host) -- both
+# containers are in this namespace's cluster network here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-systems
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-systems
+  template:
+    metadata:
+      labels:
+        app: demo-systems
+    spec:
+      containers:
+        - name: demo-systems
+          image: ghcr.io/cleanbrain-developer/relayhub-demo-systems:latest
+          ports:
+            - containerPort: 9500
+          env:
+            - name: RELAYHUB_BASE_URL
+              value: http://api:8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9500
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9500
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 160Mi
