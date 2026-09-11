@@ -975,6 +975,7 @@ api            -- relayhub-java itself (Spring Boot, port 8080)
 postgres       -- relayhub-java's database (StatefulSet, PVC)
 kafka          -- single-node KRaft broker, no PVC (see kafka/deployment.yaml)
 demo-systems   -- relayhub-demo-systems (Node.js/Express, port 9500), internal-only
+prometheus     -- scrapes api's /actuator/prometheus, no PVC, internal-only (added 2026-09-12)
 ```
 
 Two different repositories each own one Deployment here (`api` from
@@ -1021,12 +1022,21 @@ started cleanly.
 The `demo` Spring profile is always active in production
 (`SPRING_PROFILES_ACTIVE=demo` in `api/configmap.yaml`) -- `DemoDataSeeder`
 is idempotent and safe to run on every cold start, and this is what gives
-`demo-systems` something to talk to and the eventual developer-site
-dashboard something to show. There is deliberately no Prometheus/Grafana/
-Zipkin here -- that stack stays local-dev-only (see `relayhub-java`'s own
-`docs/status/current-state.md`), consistent with this repo's own principle
-of not introducing cluster-wide observability infrastructure for one
-service (see "Resource budget" below and this file's project instructions).
+`demo-systems` something to talk to and the admin console's dashboard
+something to show.
+
+**Update 2026-09-12: Prometheus was added** (`kubernetes/apps/relayhub-java/prometheus/`),
+reversing the earlier "observability stack stays local-dev-only" position --
+explicit maintainer choice, so relayhub-java's own admin console
+(`specs/005-admin-console/` in that repo) can show real time-series graphs,
+which a live-snapshot-only `/actuator/prometheus` scrape can't provide on
+its own. No PVC (`--storage.tsdb.retention.time=3d` bounds memory/disk
+instead -- same reasoning as `kafka/deployment.yaml`'s no-PVC choice), and
+no `HTTPRoute` -- it's never exposed publicly; relayhub-java's own `api` Pod
+proxies range queries to it internally over the in-cluster `prometheus`
+Service, so nothing outside this namespace ever talks to Prometheus
+directly. Grafana and Zipkin remain local-dev-only -- this was specifically
+about getting graphs into the console, not the full stack from Spec 004.
 
 ### First-time deployment
 
@@ -1088,6 +1098,16 @@ kubectl apply -f \
 
 kubectl -n cleanbrain-me-relayhub-java \
   rollout status deployment/demo-systems --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/prometheus/configmap.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/prometheus/deployment.yaml
+kubectl apply -f \
+  kubernetes/apps/relayhub-java/prometheus/service.yaml
+
+kubectl -n cleanbrain-me-relayhub-java \
+  rollout status deployment/prometheus --timeout=60s
 
 kubectl apply -f \
   kubernetes/apps/relayhub-java/httproute.yaml
@@ -2831,17 +2851,21 @@ Current application resource targets:
 | relayhub-java/kafka            |        100m |          384Mi |      500m |        768Mi |
 | relayhub-java/api              |        250m |          256Mi |     1000m |        640Mi |
 | relayhub-java/demo-systems     |         50m |           64Mi |      200m |        160Mi |
-| **Total**                      |   **1100m** |     **1536Mi** | **4600m** |  **3360Mi** |
+| relayhub-java/prometheus       |         50m |          128Mi |      200m |        256Mi |
+| **Total**                      |   **1150m** |     **1664Mi** | **4800m** |  **3616Mi** |
 
 **relayhub-java is the largest single addition to this budget so far** --
-its four workloads alone add 500m/832Mi requests and 2200m/1952Mi limits,
-because it's the first app here running a JVM process and a Kafka broker
-side by side. The combined CPU **limit** total (4600m) is now more than
-double the box's 2 vCPU (2000m) capacity -- still not itself a problem for
-the same reason noted before (limits are ceilings, not reservations, and
-simultaneous saturation across every low-traffic Pod here is unlikely), but
-the margin for that assumption is thinner than it was. Memory is the
-number to actually watch: requests (1536Mi) still leave headroom under the
+its five workloads alone add 550m/960Mi requests and 2400m/2208Mi limits,
+because it's the first app here running a JVM process, a Kafka broker, and
+now Prometheus side by side. `prometheus` was added 2026-09-12, an explicit
+reversal of the earlier "observability stays local-dev-only" position, to
+get real time-series graphs into relayhub-java's own admin console. The
+combined CPU **limit** total (4800m) is now well over double the box's
+2 vCPU (2000m) capacity -- still not itself a problem for the same reason
+noted before (limits are ceilings, not reservations, and simultaneous
+saturation across every low-traffic Pod here is unlikely), but the margin
+for that assumption keeps thinning with each addition. Memory is the
+number to actually watch: requests (1664Mi) still leave headroom under the
 4Gi box once K3s/Traefik/cert-manager/system overhead is subtracted, but
 there is little left for anything beyond that. **Run `kubectl top nodes` /
 `kubectl top pods -A` after relayhub-java's first-time deployment** and

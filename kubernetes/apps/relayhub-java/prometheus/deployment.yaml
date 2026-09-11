@@ -1,0 +1,49 @@
+# Reverses the earlier "observability stack stays local-dev-only" decision (see relayhub-java's
+# docs/status/current-state.md and this repo's own CLAUDE.md resource-budget principle) --
+# explicit maintainer choice (2026-09-12) to get real time-series graphs into the admin console
+# (specs/005-admin-console/ in relayhub-java), which needs a history data source that a live
+# snapshot (`/actuator/prometheus` alone) can't provide.
+#
+# No PVC: same reasoning as kafka/deployment.yaml -- personal-scale, data loss on restart is
+# acceptable, and --storage.tsdb.retention.time bounds memory/disk regardless. Not exposed via
+# HTTPRoute -- relayhub-java's own api Pod proxies range queries to it internally (see that
+# repo's metrics proxy endpoint), so Prometheus itself never needs a public hostname.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=3d
+            - --storage.tsdb.path=/prometheus
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config

@@ -1,0 +1,13 @@
+# Internal only — no HTTPRoute. relayhub-java's own api Pod is the only caller (its metrics
+# proxy endpoint), same pattern as demo-systems' Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: cleanbrain-me-relayhub-java
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
