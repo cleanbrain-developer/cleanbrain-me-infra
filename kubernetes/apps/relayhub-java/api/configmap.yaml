@@ -1,8 +1,8 @@
 # SPRING_PROFILES_ACTIVE=demo enables DemoDataSeeder (idempotent, safe to re-apply/restart) so
 # the deployed instance always has the flight-status demo scenario registered for
-# relayhub-demo-systems to drive. SPRING_KAFKA_BOOTSTRAP_SERVERS and
-# RELAYHUB_DEMO_SIMULATOR_BASE_URL point at the in-cluster Service names below instead of
-# relayhub-java's own application.yml defaults (localhost:9092 / localhost:9500) — Spring Boot's
+# relayhub-demo-systems to drive. SPRING_KAFKA_BOOTSTRAP_SERVERS, RELAYHUB_DEMO_SIMULATOR_BASE_URL,
+# and PROMETHEUS_BASE_URL point at the in-cluster Service names below instead of relayhub-java's
+# own application.yml defaults (localhost:9092 / localhost:9500 / localhost:9090) — Spring Boot's
 # environment-variable relaxed binding overrides application.yml automatically, no code change
 # needed. MANAGEMENT_TRACING_SAMPLING_PROBABILITY=0 disables tracing export entirely: there is no
 # Zipkin in this namespace (the observability stack stays local-dev-only, see relayhub-java's
@@ -17,6 +17,9 @@ data:
   SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0"
   RELAYHUB_DEMO_SIMULATOR_BASE_URL: http://demo-systems:9500
+  # See kubernetes/apps/relayhub-java/prometheus/ — the admin console's charts (Spec 005 follow-up,
+  # 2026-09-12) proxy through api/metrics/MetricsController.java to this Service, never directly.
+  PROMETHEUS_BASE_URL: http://prometheus:9090
   TZ: Asia/Seoul
   # Java's own container-aware default (25% of the container memory limit) is too conservative
   # for a Spring Boot + Hibernate + Kafka client footprint at this container's memory limit.
