@@ -1,0 +1,63 @@
+# :latest here is a real, pullable tag by the time you bootstrap -- NOT a
+# placeholder -- because deploy.yml's build-and-push job publishes both
+# :latest and :<git-sha> on every push to main regardless of whether
+# ENABLE_PRODUCTION_DEPLOY is set. This only holds if you push to main at
+# least once BEFORE running "First-time deployment" (bootstrapping against an
+# empty GHCR package would ImagePullBackOff). Ongoing deploys update the
+# running Deployment's image via `kubectl set image` from CI with the
+# immutable :<git-sha> tag and do NOT rewrite this file -- re-applying it
+# as-is after a CI deploy will roll the cluster back to :latest as of that
+# apply.
+#
+# The cleanbrain-me-visitor-counter GitHub repo/GHCR package is public,
+# matching english-core-speaking/entrance/developer/relayhub-java -- no
+# imagePullSecrets needed. See README.md "GHCR image pull authentication".
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cleanbrain-me-visitor-counter
+spec:
+  replicas: 1 # SQLite: never scale beyond 1 without moving off SQLite first.
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/cleanbrain-developer/cleanbrain-me-visitor-counter:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data

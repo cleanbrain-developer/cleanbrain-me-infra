@@ -1,0 +1,26 @@
+# Attaches to the pre-existing shared Gateway in cleanbrain-me-system.
+# Does NOT create the Gateway, cert-manager, or ClusterIssuer -- those
+# already exist and are managed outside this app's manifests.
+#
+# Unlike every other app here, this hostname is called directly from the
+# browser by the other 5 services' frontends (CORS, not server-to-server),
+# so it needs its own public hostname/certificate the same as any other app.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: visitor-counter
+  namespace: cleanbrain-me-visitor-counter
+spec:
+  parentRefs:
+    - name: cleanbrain-me-gateway
+      namespace: cleanbrain-me-system
+  hostnames:
+    - visitor-counter.cleanbrain.me
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: api
+          port: 3000

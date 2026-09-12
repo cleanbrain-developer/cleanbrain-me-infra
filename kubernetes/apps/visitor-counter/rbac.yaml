@@ -1,0 +1,55 @@
+# Least-privilege identity for the GitHub Actions SSH deploy bridge
+# (.github/workflows/deploy.yml in the cleanbrain-me-visitor-counter repo).
+#
+# Scope: this Role is a namespaced Role (not ClusterRole), bound only inside
+# cleanbrain-me-visitor-counter, so it is structurally incapable of touching
+# any other namespace -- including cleanbrain-me-system (Gateway,
+# ClusterIssuer, cert-manager) or any other application's namespace.
+#
+# Deliberately NOT a widened copy of any other service's ci-deployer -- each
+# application gets its own ServiceAccount/Role/RoleBinding scoped to its own
+# namespace and its own Deployment name.
+#
+# Applied once by the cluster administrator as part of bootstrap. The CI
+# identity itself has no permission to modify this file's resources (no
+# rbac.authorization.k8s.io access is granted below), so it cannot escalate
+# or re-scope itself.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-visitor-counter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-visitor-counter
+rules:
+  # Exactly what `kubectl set image` (a patch) and `kubectl rollout status`
+  # (get + watch) need, and nothing else. No create/update/delete, no verbs
+  # on Secrets/ConfigMaps/Services/the PVC.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api"]
+    verbs: ["get", "patch"]
+  # resourceNames can't scope "watch"/"list" (they filter get/patch/delete
+  # only), so those two verbs are granted on the resource type -- still
+  # confined to this namespace by the Role/RoleBinding boundary.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer
+  namespace: cleanbrain-me-visitor-counter
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer
+    namespace: cleanbrain-me-visitor-counter
+roleRef:
+  kind: Role
+  name: ci-deployer
+  apiGroup: rbac.authorization.k8s.io

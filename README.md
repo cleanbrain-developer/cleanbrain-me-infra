@@ -13,6 +13,7 @@ Current application repositories:
 - [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
 - [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) + [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) (two repositories, one namespace/deployment — see "relayhub-java" below)
 - [`cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer) (see "developer" below)
+- [`cleanbrain-me-visitor-counter`](https://github.com/cleanbrain-developer/cleanbrain-me-visitor-counter) (shared anonymous "today visitor count" API called by all 5 frontends above -- see "visitor-counter" below)
 
 ---
 
@@ -151,6 +152,7 @@ name: entrance-https                port: 8443  protocol: HTTPS  hostname: clean
 name: kioti-crm-discount-https       port: 8443  protocol: HTTPS  hostname: crm-discount.kioti.cleanbrain.me  (added 2026-09-09, see discrepancy note below)
 name: relayhub-java-https            port: 8443  protocol: HTTPS  hostname: relayhub-java.developer.cleanbrain.me  (added 2026-09-11 via kubectl patch, see "relayhub-java" below)
 name: developer-https                port: 8443  protocol: HTTPS  hostname: developer.cleanbrain.me  (added 2026-09-13 via kubectl patch, see "developer" below)
+name: visitor-counter-https          port: 8443  protocol: HTTPS  hostname: visitor-counter.cleanbrain.me  (see "visitor-counter" below)
 ```
 
 Applications must **not recreate the Gateway**.
@@ -425,6 +427,7 @@ english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 relayhub-java.developer.cleanbrain.me
 developer.cleanbrain.me
+visitor-counter.cleanbrain.me
 ```
 
 `relayhub-java.developer.cleanbrain.me` resolves and is issued (confirmed
@@ -460,6 +463,13 @@ further DNS changes:
 ```text
 *.kioti.cleanbrain.me   A   <Hetzner public IP>   (Proxy: DNS Only)
 ```
+
+`visitor-counter.cleanbrain.me` needs its own single, non-wildcard A record
+pointing at the Hetzner public IP (same reasoning as
+`relayhub-java.developer.cleanbrain.me` -- see "relayhub-java" below), plus
+its own Gateway listener (see "Networking" > "Gateway" above), before
+`kubernetes/apps/visitor-counter/httproute.yaml` will resolve at all -- see
+"visitor-counter" > "First-time deployment" below for the exact steps.
 
 All records ultimately resolve directly to the Hetzner VM.
 
@@ -567,7 +577,8 @@ kubernetes/
 │   ├── cleanbrain-me-kioti-crm-discount.yaml
 │   ├── cleanbrain-me-entrance.yaml
 │   ├── cleanbrain-me-relayhub-java.yaml
-│   └── cleanbrain-me-developer.yaml
+│   ├── cleanbrain-me-developer.yaml
+│   └── cleanbrain-me-visitor-counter.yaml
 │
 └── apps/
     ├── english-core-speaking/
@@ -624,8 +635,16 @@ kubernetes/
     │       ├── deployment.yaml
     │       └── service.yaml
     │
-    └── developer/               # static export served by nginx, per that repo's ADR-0003
+    ├── developer/               # static export served by nginx, per that repo's ADR-0003
+    │   ├── rbac.yaml
+    │   ├── deployment.yaml
+    │   ├── service.yaml
+    │   └── httproute.yaml
+    │
+    └── visitor-counter/         # shared anonymous "today visitor count" API, called by all 5 frontends
+        ├── secret.example.yaml
         ├── rbac.yaml
+        ├── pvc.yaml
         ├── deployment.yaml
         ├── service.yaml
         └── httproute.yaml
@@ -1364,6 +1383,154 @@ immutable commit-SHA tag CI just pushed (not `:latest`), and
 
 ---
 
+## visitor-counter
+
+Source repository:
+
+[`cleanbrain-developer/cleanbrain-me-visitor-counter`](https://github.com/cleanbrain-developer/cleanbrain-me-visitor-counter)
+
+Shared anonymous "today visitor count" API, called directly from the
+browser (CORS, not server-to-server) by all 5 other frontends
+(`entrance`, `developer`, `english-core-speaking`, `relayhub-java`,
+`kioti-crm-discount`). This exists because `entrance` and `developer` are
+both static sites with no backend/DB of their own by explicit ADR (see
+their own repos' architecture docs) -- rather than reversing those ADRs or
+standing up a separate DB per service on a 2 vCPU / 4 GB host, one small
+shared service hosts the counter for all five.
+
+A "visitor" is the distinct `(IP, User-Agent)` pair seen for a given
+service on a given calendar day, evaluated in the *caller's* timezone (sent
+as a `tz` query param), not the server's. IPs are never stored raw --
+only an HMAC-SHA256 hash keyed by `VISITOR_IP_HASH_SALT`.
+
+### Runtime
+
+```text
+Namespace:
+  cleanbrain-me-visitor-counter
+
+Hostname:
+  visitor-counter.cleanbrain.me
+```
+
+Single container, no separate DB Pod:
+
+```text
+api       -- Node/Express API (port 3000)
+```
+
+Persistence is a single SQLite file on a PersistentVolumeClaim (`data`,
+mounted at `/app/data`), same shape as `kioti-crm-discount` -- SQLite does
+not support concurrent writers across processes, so `replicas` must stay at
+`1` unless the application moves off SQLite first. Only a few days of rows
+are ever retained (the app purges old rows itself; see the application
+repo's README), so the volume stays small.
+
+Routing:
+
+```text
+/*  -> api:3000
+```
+
+Container image:
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-visitor-counter
+```
+
+Public GHCR package, matching `english-core-speaking`/`entrance`/`developer`/
+`relayhub-java` -- no `imagePullSecrets` needed (see "GHCR image pull
+authentication" below). Application deployments should use immutable Git
+commit SHA image tags; `:latest` is also published for convenience/bootstrap,
+same convention as every other app here.
+
+### First-time deployment
+
+Prerequisite: push `cleanbrain-me-visitor-counter`'s `main` branch at least
+once first, so `deployment.yaml`'s `:latest` tag exists in GHCR before
+bootstrap (same reasoning as every other app above).
+
+```bash
+kubectl apply -f \
+  kubernetes/namespaces/cleanbrain-me-visitor-counter.yaml
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/rbac.yaml
+```
+
+Create the Secret (see "Secrets" below), then:
+
+```bash
+cp \
+  kubernetes/apps/visitor-counter/secret.example.yaml \
+  kubernetes/apps/visitor-counter/secret.yaml
+# edit secret.yaml with real values (VISITOR_IP_HASH_SALT, ALLOWED_ORIGINS), never commit it
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/secret.yaml
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/pvc.yaml
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/deployment.yaml
+
+kubectl -n cleanbrain-me-visitor-counter \
+  rollout status deployment/api \
+  --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/service.yaml
+
+kubectl apply -f \
+  kubernetes/apps/visitor-counter/httproute.yaml
+```
+
+**DNS and the Gateway listener are both required, same as `relayhub-java`'s
+first deployment:** add a single `visitor-counter` A record (Cloudflare,
+Proxy: DNS Only) pointing at the Hetzner public IP, and add a Gateway
+listener via JSON patch (see "Networking" > "Gateway" above for the general
+mechanism):
+
+```bash
+kubectl patch gateway cleanbrain-me-gateway -n cleanbrain-me-system --type=json -p '[
+  {
+    "op": "add",
+    "path": "/spec/listeners/-",
+    "value": {
+      "name": "visitor-counter-https",
+      "hostname": "visitor-counter.cleanbrain.me",
+      "port": 8443,
+      "protocol": "HTTPS",
+      "tls": {
+        "mode": "Terminate",
+        "certificateRefs": [
+          { "kind": "Secret", "name": "cleanbrain-me-visitor-counter-tls" }
+        ]
+      },
+      "allowedRoutes": {
+        "namespaces": { "from": "All" }
+      }
+    }
+  }
+]'
+
+kubectl get certificate -n cleanbrain-me-system -w
+```
+
+Verify the same way as `english-core-speaking` ("Deployment verification"
+below), substituting the namespace and hostname, plus
+`curl https://visitor-counter.cleanbrain.me/healthz` (expect
+`{"status":"ok"}`).
+
+Once this service is live, each of the 5 frontend repos needs its own
+`ALLOWED_ORIGINS` entry above updated to match, and its own public env var
+(`VITE_VISITOR_COUNTER_URL` / `NEXT_PUBLIC_VISITOR_COUNTER_URL`) pointing at
+`https://visitor-counter.cleanbrain.me` -- see each frontend repo for where
+that's configured.
+
+---
+
 ## PostgreSQL
 
 PostgreSQL runs as a single-replica StatefulSet.
@@ -1507,6 +1674,31 @@ Do this **before** rolling out the Spec 005 image -- deploying the admin console
 default credentials still in effect means every write endpoint is effectively unauthenticated
 against a public hostname.
 
+### visitor-counter
+
+Template:
+
+```text
+kubernetes/apps/visitor-counter/secret.example.yaml
+```
+
+Local production file:
+
+```text
+kubernetes/apps/visitor-counter/secret.yaml
+```
+
+Required values:
+
+| Key                      | Purpose                                                          |
+| ------------------------- | ----------------------------------------------------------------- |
+| `DATABASE_PATH`          | SQLite file path on the mounted PVC (`/app/data/visitor-counter.db`) |
+| `VISITOR_IP_HASH_SALT`   | HMAC salt used to hash client IPs before storage -- raw IPs are never persisted |
+| `ALLOWED_ORIGINS`        | Comma-separated list of the 5 frontend origins allowed to call this API from the browser |
+| `VISITOR_RETENTION_DAYS` | How many days of visit rows to keep before the app purges them (default `3`) |
+
+No external third-party credentials -- this app has no such integration.
+
 ### Google OAuth
 
 Google Cloud Console must contain the production redirect URI:
@@ -1612,6 +1804,19 @@ ghcr.io/cleanbrain-developer/cleanbrain-me-developer
 Same as `cleanbrain-me-entrance`/`english-core-speaking`: no registry
 credential, no Kubernetes Secret, and no `imagePullSecrets` entry on the
 Deployment. `kubernetes/apps/developer/deployment.yaml` reflects this.
+
+## cleanbrain-me-visitor-counter: public package
+
+Current policy: the GHCR package is **public**, same as every other app
+except `kioti-crm-discount`:
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-visitor-counter
+```
+
+No registry credential, no Kubernetes Secret, and no `imagePullSecrets`
+entry on the Deployment. `kubernetes/apps/visitor-counter/deployment.yaml`
+reflects this.
 
 ---
 
