@@ -12,7 +12,7 @@ Current application repositories:
 - [`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private repository)
 - [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
 - [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) + [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) (two repositories, one namespace/deployment — see "relayhub-java" below)
-- [`cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer) (in progress — see "developer" below)
+- [`cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer) (see "developer" below)
 
 ---
 
@@ -1294,9 +1294,11 @@ expected and correct (TLS terminates, but nothing is routed there yet).
 
 ## 1. Namespace, RBAC, Deployment, Service, HTTPRoute
 
-Not yet applied to the live cluster as of this writing -- the manifests
-below exist and are committed, but no `kubectl apply` has run against
-production yet. Apply in this order, matching every other app here:
+Applied and verified (2026-09-13, by the cluster administrator directly
+on the server, having pulled this repo's `main` there first): `pod/web`
+is `Running 1/1`, `service/web` exists, `httproute/developer` shows
+`Accepted: True` / `ResolvedRefs: True`, and the site serves successfully
+over HTTPS.
 
 ```bash
 kubectl apply -f \
@@ -1319,12 +1321,14 @@ kubectl apply -f \
   kubernetes/apps/developer/httproute.yaml
 ```
 
-Expected after this: `pod/web` `Running 1/1`, `service/web` exists,
-`httproute/developer` shows `Accepted: True` / `ResolvedRefs: True`, and
-`curl -I https://developer.cleanbrain.me/` returns `HTTP/2 200`. Update
-this section (and "DNS"/"Networking" > "Gateway" above, which already
-reflect the DNS/TLS steps) once confirmed, the same way `entrance`'s
-equivalent section was updated after its own first deployment.
+Verified end to end (2026-09-13): `curl -I https://developer.cleanbrain.me/`
+returns `200`; `/lab/relayhub` and `/projects/relayhub` also return `200`,
+and an unmatched path correctly returns `404`. A full headless-browser
+pass against the live URL generated a synthetic event in the RelayHub
+Live Lab (Normal scenario, all six pipeline stages reached `success`)
+with no console errors -- the client-side adapter/state machine works
+identically to the local `docker run` verification in `cleanbrain-me-
+developer`'s own `docs/status/current-state.md`.
 
 ## 2. CI ServiceAccount token and deploy-host kubeconfig
 
@@ -3057,10 +3061,10 @@ saturation across every low-traffic Pod here is unlikely), but the margin
 for that assumption keeps thinning with each addition. Memory is the
 number to actually watch: requests (1696Mi) still leave headroom under the
 4Gi box once K3s/Traefik/cert-manager/system overhead is subtracted, but
-there is little left for anything beyond that. `developer/web` (added
-2026-09-13, pending first-time deployment -- see "developer" below) is the
-next-smallest addition here, the same shape as `entrance/web`: a static
-export served by nginx, no server runtime. **Run `kubectl top nodes` /
+there is little left for anything beyond that. `developer/web` (deployed
+2026-09-13 -- see "developer" below) is the next-smallest addition here,
+the same shape as `entrance/web`: a static export served by nginx, no
+server runtime. **Run `kubectl top nodes` /
 `kubectl top pods -A` after relayhub-java's first-time deployment** and
 before adding any further service under this budget -- if memory pressure
 shows up, `relayhub-java/kafka`'s `KAFKA_HEAP_OPTS` and `relayhub-java/api`'s
