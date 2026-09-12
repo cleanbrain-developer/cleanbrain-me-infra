@@ -1,0 +1,30 @@
+# Attaches to the pre-existing shared Gateway in cleanbrain-me-system. Does NOT create the
+# Gateway, cert-manager, ClusterIssuer, or TLS Certificate.
+#
+# `developer.cleanbrain.me` has NO DNS record and NO Gateway HTTPS listener today (confirmed
+# 2026-09-13 by reading this repo's own README) -- only its sibling
+# relayhub-java.developer.cleanbrain.me exists under the developer.cleanbrain.me subdomain
+# namespace. Both a DNS A record for the bare `developer.cleanbrain.me` host (a future
+# *.developer.cleanbrain.me wildcard would NOT cover it -- a wildcard needs a label in the `*`
+# position) and a new Gateway listener (cert-manager Gateway Shim auto-issues the certificate
+# once the listener exists, same as every other hostname on this Gateway) must be added before
+# this route can resolve or serve HTTPS at all -- applying this file alone is not enough.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: developer
+  namespace: cleanbrain-me-developer
+spec:
+  parentRefs:
+    - name: cleanbrain-me-gateway
+      namespace: cleanbrain-me-system
+  hostnames:
+    - developer.cleanbrain.me
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: web
+          port: 80
