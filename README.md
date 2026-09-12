@@ -1332,10 +1332,15 @@ developer`'s own `docs/status/current-state.md`.
 
 ## 2. CI ServiceAccount token and deploy-host kubeconfig
 
-Not yet done. Once the Deployment above exists, follow "Multi-application
-kubeconfig on the deploy host" below (this will be the fourth application
-sharing `/home/deploy/.kube/config`, after `english-core-speaking`,
-`cleanbrain-me-entrance`, and `relayhub-java`) with:
+Completed and verified (2026-09-13): `kubectl auth whoami` returned
+`system:serviceaccount:cleanbrain-me-developer:ci-deployer`, `can-i patch
+deployment/web` returned `yes`, and `can-i get secrets` returned `no`, all
+via the `ci-deployer-cleanbrain-me-developer@cleanbrain-me-k3s` context
+merged into the same `/home/deploy/.kube/config` as `english-core-speaking`,
+`cleanbrain-me-entrance`, and `relayhub-java` (the fourth application
+sharing that file) without disturbing its `current-context`. Followed
+"Multi-application kubeconfig on the deploy host" below rather than the
+single-app numbered steps, substituting:
 
 ```bash
 export DEPLOY_NAMESPACE="cleanbrain-me-developer"
@@ -1343,19 +1348,19 @@ export DEPLOY_SERVICE_ACCOUNT="ci-deployer"
 export DEPLOY_TOKEN_SECRET="ci-deployer-cleanbrain-me-developer-token"
 ```
 
-substituted into that section's commands, then verify with
-`--context=ci-deployer-cleanbrain-me-developer@cleanbrain-me-k3s` the same
-way as `entrance`'s "2. CI ServiceAccount token and deploy-host
-kubeconfig" above.
-
 ## 3. Enable CI deploys
 
-Not yet done. Set the `HETZNER_SSH_*` GitHub Actions secrets on
-`cleanbrain-me-developer` (reusing the existing SSH keypair/`deploy`
-account, same as every other app here), then set
-`ENABLE_PRODUCTION_DEPLOY=true` as a repository variable and trigger a
-real run to verify `test` -> `build-and-push` -> `deploy` succeeds end to
-end, the same way `entrance`'s "3. Enable CI deploys" above was verified.
+Completed and verified (2026-09-13): `HETZNER_SSH_*` secrets were set on
+`cleanbrain-me-developer` reusing `english-core-speaking`'s existing CI SSH
+keypair (same server, same `deploy` Linux user, host key fingerprint
+cross-checked directly on the server before trusting `ssh-keyscan`'s
+output), `ENABLE_PRODUCTION_DEPLOY=true` was set as a repository variable,
+and a real triggered run (`test` -> `build-and-push` -> `deploy`) succeeded
+end to end -- `kubectl set image` and `kubectl rollout status` both
+completed over the CI SSH bridge. Confirmed the running Pod's image is the
+immutable commit-SHA tag CI just pushed (not `:latest`), and
+`https://developer.cleanbrain.me/` still returns `200` afterward.
+`cleanbrain-me-developer` is fully deployed with a working CI/CD pipeline.
 
 ---
 
