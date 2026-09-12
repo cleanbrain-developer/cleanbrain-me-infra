@@ -12,6 +12,7 @@ Current application repositories:
 - [`kioti-crm-discount-enhance-demo`](https://github.com/cleanbrain-developer/kioti-crm-discount-enhance-demo) (private repository)
 - [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
 - [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) + [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) (two repositories, one namespace/deployment — see "relayhub-java" below)
+- [`cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer) (in progress — see "developer" below)
 
 ---
 
@@ -149,6 +150,7 @@ name: english-core-speaking-https   port: 8443  protocol: HTTPS  hostname: engli
 name: entrance-https                port: 8443  protocol: HTTPS  hostname: cleanbrain.me
 name: kioti-crm-discount-https       port: 8443  protocol: HTTPS  hostname: crm-discount.kioti.cleanbrain.me  (added 2026-09-09, see discrepancy note below)
 name: relayhub-java-https            port: 8443  protocol: HTTPS  hostname: relayhub-java.developer.cleanbrain.me  (added 2026-09-11 via kubectl patch, see "relayhub-java" below)
+name: developer-https                port: 8443  protocol: HTTPS  hostname: developer.cleanbrain.me  (added 2026-09-13 via kubectl patch, see "developer" below)
 ```
 
 Applications must **not recreate the Gateway**.
@@ -422,6 +424,7 @@ Current application hostnames:
 english-core-speaking.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 relayhub-java.developer.cleanbrain.me
+developer.cleanbrain.me
 ```
 
 `relayhub-java.developer.cleanbrain.me` resolves and is issued (confirmed
@@ -430,6 +433,22 @@ shows a real Let's Encrypt certificate, not Traefik's self-signed default
 -- see "relayhub-java" > "First-time deployment" above for the DNS record
 and Gateway listener steps that got it there). It's the first hostname
 under the `developer.cleanbrain.me` subdomain namespace.
+
+`developer.cleanbrain.me` itself -- the bare host, not a `relayhub-<lang>`
+sibling under it -- is a **CNAME to `cleanbrain.me`**, not a separate A
+record (confirmed 2026-09-13: `developer.cleanbrain.me` resolves via
+`canonical name = cleanbrain.me.` to the same Hetzner public IP). This is
+fine for Gateway routing (Traefik matches on the HTTP `Host` header, which
+is unaffected by whether the client's resolver followed an A or a CNAME
+record to get there) and is confirmed working: `openssl s_client` against
+`developer.cleanbrain.me:443` shows a real Let's Encrypt certificate
+(`CN = developer.cleanbrain.me`, `Verify return code: 0`) after the Gateway
+listener below was added -- see "developer" below. `cleanbrain-me-developer`
+(the portfolio site) and `relayhub-java.developer.cleanbrain.me` (a sibling
+one level deeper) are two different applications sharing the
+`developer.cleanbrain.me` name at different points in the hostname -- see
+"Naming conventions" > "`developer.cleanbrain.me` subdomain namespace"
+below for how that is not a conflict.
 
 `cleanbrain-me-entrance` targets the bare apex hostname `cleanbrain.me` itself, not a subdomain. An A record for the apex, pointing at the Hetzner public IP, already exists (confirmed 2026-09-09) -- unlike the TLS certificate for that hostname, DNS is not a blocker for this service (see "TLS" above for the remaining open item).
 
@@ -513,15 +532,29 @@ first deployment; do not assume a new `HTTPRoute` alone is enough.
 
 ### `developer.cleanbrain.me` subdomain namespace
 
-Same pattern as `kioti.cleanbrain.me`, introduced for `relayhub-java`: a
-DNS-level grouping (not a Kubernetes namespace) for `relayhub-<lang>`
-sibling services per that repo's own ADR-0002 (`relayhub-java` today,
-possibly a `relayhub-node` etc. later). Unlike `kioti.cleanbrain.me`, this
-one has **no wildcard DNS record yet** -- it needs to be created (or a
-single non-wildcard record added) as part of `relayhub-java`'s first
-deployment; see "DNS" above and "relayhub-java" > "First-time deployment".
-Each service under it still gets its own `cleanbrain-me-<service-name>`
-namespace and its own Gateway listener, same as `kioti.cleanbrain.me`.
+Originally introduced for `relayhub-java`: a DNS-level grouping (not a
+Kubernetes namespace) for `relayhub-<lang>` sibling services per that
+repo's own ADR-0002 (`relayhub-java` today, possibly a `relayhub-node` etc.
+later), same pattern as `kioti.cleanbrain.me`. Unlike `kioti.cleanbrain.me`,
+there is still **no wildcard DNS record** for `*.developer.cleanbrain.me`
+-- `relayhub-java.developer.cleanbrain.me` has its own single, non-wildcard
+record instead (see "relayhub-java" > "First-time deployment"). A future
+`relayhub-<lang>` sibling would need the same treatment: its own DNS record
+and its own Gateway listener, not automatic coverage from a wildcard that
+doesn't exist.
+
+**This name is used two different ways at once, and that is intentional,
+not a conflict**: the *bare* hostname `developer.cleanbrain.me` (zero
+labels before `developer`) is `cleanbrain-me-developer`'s own portfolio
+site -- a completely different application from anything one level
+deeper. A DNS wildcard can never cause a collision here even if one is
+added later, because a wildcard match requires at least one label in the
+`*` position; it can never match the bare `developer.cleanbrain.me` host
+itself. Each of the two "roles" for this name still gets its own ordinary
+`cleanbrain-me-<service-name>` namespace and its own Gateway listener
+(`cleanbrain-me-developer` / `developer-https`, and
+`cleanbrain-me-relayhub-java` / `relayhub-java-https`), exactly like every
+other hostname on this Gateway.
 
 ---
 
@@ -533,7 +566,8 @@ kubernetes/
 │   ├── cleanbrain-me-english-core-speaking.yaml
 │   ├── cleanbrain-me-kioti-crm-discount.yaml
 │   ├── cleanbrain-me-entrance.yaml
-│   └── cleanbrain-me-relayhub-java.yaml
+│   ├── cleanbrain-me-relayhub-java.yaml
+│   └── cleanbrain-me-developer.yaml
 │
 └── apps/
     ├── english-core-speaking/
@@ -568,27 +602,33 @@ kubernetes/
     │   ├── service.yaml
     │   └── httproute.yaml
     │
-    └── relayhub-java/
-        ├── secret.example.yaml
-        ├── rbac.yaml            # two ServiceAccounts — see "relayhub-java" above
-        ├── httproute.yaml
-        │
-        ├── postgres/
-        │   ├── statefulset.yaml
-        │   └── service.yaml
-        │
-        ├── kafka/
-        │   ├── deployment.yaml
-        │   └── service.yaml
-        │
-        ├── api/
-        │   ├── configmap.yaml
-        │   ├── deployment.yaml
-        │   └── service.yaml
-        │
-        └── demo-systems/        # no httproute — internal-only
-            ├── deployment.yaml
-            └── service.yaml
+    ├── relayhub-java/
+    │   ├── secret.example.yaml
+    │   ├── rbac.yaml            # two ServiceAccounts — see "relayhub-java" above
+    │   ├── httproute.yaml
+    │   │
+    │   ├── postgres/
+    │   │   ├── statefulset.yaml
+    │   │   └── service.yaml
+    │   │
+    │   ├── kafka/
+    │   │   ├── deployment.yaml
+    │   │   └── service.yaml
+    │   │
+    │   ├── api/
+    │   │   ├── configmap.yaml
+    │   │   ├── deployment.yaml
+    │   │   └── service.yaml
+    │   │
+    │   └── demo-systems/        # no httproute — internal-only
+    │       ├── deployment.yaml
+    │       └── service.yaml
+    │
+    └── developer/               # static export served by nginx, per that repo's ADR-0003
+        ├── rbac.yaml
+        ├── deployment.yaml
+        ├── service.yaml
+        └── httproute.yaml
 ```
 
 Plain Kubernetes manifests are used initially.
@@ -1182,6 +1222,139 @@ component also `UP`.
 
 ---
 
+## developer
+
+Source repository:
+
+[`cleanbrain-developer/cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer)
+
+Developer profile, engineering portfolio, and a live RelayHub engineering
+lab (a client-side mock of relayhub-java's own event pipeline) for
+`cleanbrain.developer`. Static export served by nginx -- see that
+repository's ADR-0003 -- not a running Next.js/Node server; the same
+lighter-weight shape as `entrance`, not `english-core-speaking`.
+
+### Runtime
+
+```text
+Namespace:
+  cleanbrain-me-developer
+
+Hostname:
+  developer.cleanbrain.me
+```
+
+Application components:
+
+```text
+web
+```
+
+Routing:
+
+```text
+/*  -> web:80
+```
+
+Container image:
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-developer
+```
+
+Public, matching `entrance`/`english-core-speaking` (confirmed 2026-09-13:
+`docker manifest inspect` against `:latest` succeeded with no
+authentication) -- no `imagePullSecrets` needed. Application deployments
+should use immutable Git commit SHA image tags; `:latest` is also
+published for convenience/bootstrap, same convention as every other app
+here.
+
+### First-time deployment
+
+Prerequisite: push `cleanbrain-me-developer`'s `main` branch at least once
+first, so `deployment.yaml`'s `:latest` tag exists in GHCR before
+bootstrap (same reasoning as `english-core-speaking`/`entrance` above).
+This has already been done; CI (`test` + `build-and-push`) has succeeded
+on `main` more than once.
+
+DNS and the Gateway listener are both resolved and confirmed working:
+`developer.cleanbrain.me` is a CNAME to `cleanbrain.me` (see "DNS" above),
+and the `developer-https` Gateway listener was added via the same
+`kubectl patch` mechanism as `relayhub-java` -- see "Networking" >
+"Gateway" above for the current listener list. `openssl s_client` against
+`developer.cleanbrain.me:443` confirmed a real Let's Encrypt certificate
+(`CN = developer.cleanbrain.me`, `Verify return code: 0`) on 2026-09-13,
+**before** the namespace/Deployment/Service/HTTPRoute below existed --
+cert-manager's Gateway Shim issues a certificate for a listener
+independently of whether that hostname's `HTTPRoute`/backend exists yet
+(its ACME HTTP-01 challenge is solved by cert-manager's own temporary
+routing through the Gateway, not by this application's `HTTPRoute`).
+`curl -I https://developer.cleanbrain.me/` returned `404` at that point --
+expected and correct (TLS terminates, but nothing is routed there yet).
+
+## 1. Namespace, RBAC, Deployment, Service, HTTPRoute
+
+Not yet applied to the live cluster as of this writing -- the manifests
+below exist and are committed, but no `kubectl apply` has run against
+production yet. Apply in this order, matching every other app here:
+
+```bash
+kubectl apply -f \
+  kubernetes/namespaces/cleanbrain-me-developer.yaml
+
+kubectl apply -f \
+  kubernetes/apps/developer/rbac.yaml
+
+kubectl apply -f \
+  kubernetes/apps/developer/deployment.yaml
+
+kubectl -n cleanbrain-me-developer \
+  rollout status deployment/web \
+  --timeout=120s
+
+kubectl apply -f \
+  kubernetes/apps/developer/service.yaml
+
+kubectl apply -f \
+  kubernetes/apps/developer/httproute.yaml
+```
+
+Expected after this: `pod/web` `Running 1/1`, `service/web` exists,
+`httproute/developer` shows `Accepted: True` / `ResolvedRefs: True`, and
+`curl -I https://developer.cleanbrain.me/` returns `HTTP/2 200`. Update
+this section (and "DNS"/"Networking" > "Gateway" above, which already
+reflect the DNS/TLS steps) once confirmed, the same way `entrance`'s
+equivalent section was updated after its own first deployment.
+
+## 2. CI ServiceAccount token and deploy-host kubeconfig
+
+Not yet done. Once the Deployment above exists, follow "Multi-application
+kubeconfig on the deploy host" below (this will be the fourth application
+sharing `/home/deploy/.kube/config`, after `english-core-speaking`,
+`cleanbrain-me-entrance`, and `relayhub-java`) with:
+
+```bash
+export DEPLOY_NAMESPACE="cleanbrain-me-developer"
+export DEPLOY_SERVICE_ACCOUNT="ci-deployer"
+export DEPLOY_TOKEN_SECRET="ci-deployer-cleanbrain-me-developer-token"
+```
+
+substituted into that section's commands, then verify with
+`--context=ci-deployer-cleanbrain-me-developer@cleanbrain-me-k3s` the same
+way as `entrance`'s "2. CI ServiceAccount token and deploy-host
+kubeconfig" above.
+
+## 3. Enable CI deploys
+
+Not yet done. Set the `HETZNER_SSH_*` GitHub Actions secrets on
+`cleanbrain-me-developer` (reusing the existing SSH keypair/`deploy`
+account, same as every other app here), then set
+`ENABLE_PRODUCTION_DEPLOY=true` as a repository variable and trigger a
+real run to verify `test` -> `build-and-push` -> `deploy` succeeds end to
+end, the same way `entrance`'s "3. Enable CI deploys" above was verified.
+
+---
+
 ## PostgreSQL
 
 PostgreSQL runs as a single-replica StatefulSet.
@@ -1414,6 +1587,22 @@ ghcr.io/cleanbrain-developer/relayhub-demo-systems
 ```
 
 No `imagePullSecrets` on either Deployment.
+
+## cleanbrain-me-developer: public package
+
+Current policy: the GHCR package is **public** (confirmed 2026-09-13 via
+`docker manifest inspect ghcr.io/cleanbrain-developer/cleanbrain-me-developer:latest`
+succeeding with no authentication -- not yet confirmed via the GitHub
+package settings UI, since the local `gh` credential used for this session
+lacks the `read:packages` scope needed to query that API directly).
+
+```text
+ghcr.io/cleanbrain-developer/cleanbrain-me-developer
+```
+
+Same as `cleanbrain-me-entrance`/`english-core-speaking`: no registry
+credential, no Kubernetes Secret, and no `imagePullSecrets` entry on the
+Deployment. `kubernetes/apps/developer/deployment.yaml` reflects this.
 
 ---
 
@@ -2852,7 +3041,8 @@ Current application resource targets:
 | relayhub-java/api              |        250m |          256Mi |     1000m |        640Mi |
 | relayhub-java/demo-systems     |         50m |           64Mi |      200m |        160Mi |
 | relayhub-java/prometheus       |         50m |          128Mi |      200m |        256Mi |
-| **Total**                      |   **1150m** |     **1664Mi** | **4800m** |  **3616Mi** |
+| developer/web                  |         50m |           32Mi |      200m |         64Mi |
+| **Total**                      |   **1200m** |     **1696Mi** | **5000m** |  **3680Mi** |
 
 **relayhub-java is the largest single addition to this budget so far** --
 its five workloads alone add 550m/960Mi requests and 2400m/2208Mi limits,
@@ -2860,14 +3050,17 @@ because it's the first app here running a JVM process, a Kafka broker, and
 now Prometheus side by side. `prometheus` was added 2026-09-12, an explicit
 reversal of the earlier "observability stays local-dev-only" position, to
 get real time-series graphs into relayhub-java's own admin console. The
-combined CPU **limit** total (4800m) is now well over double the box's
+combined CPU **limit** total (5000m) is now well over double the box's
 2 vCPU (2000m) capacity -- still not itself a problem for the same reason
 noted before (limits are ceilings, not reservations, and simultaneous
 saturation across every low-traffic Pod here is unlikely), but the margin
 for that assumption keeps thinning with each addition. Memory is the
-number to actually watch: requests (1664Mi) still leave headroom under the
+number to actually watch: requests (1696Mi) still leave headroom under the
 4Gi box once K3s/Traefik/cert-manager/system overhead is subtracted, but
-there is little left for anything beyond that. **Run `kubectl top nodes` /
+there is little left for anything beyond that. `developer/web` (added
+2026-09-13, pending first-time deployment -- see "developer" below) is the
+next-smallest addition here, the same shape as `entrance/web`: a static
+export served by nginx, no server runtime. **Run `kubectl top nodes` /
 `kubectl top pods -A` after relayhub-java's first-time deployment** and
 before adding any further service under this budget -- if memory pressure
 shows up, `relayhub-java/kafka`'s `KAFKA_HEAP_OPTS` and `relayhub-java/api`'s
