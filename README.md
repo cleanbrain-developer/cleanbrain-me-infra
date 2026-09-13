@@ -147,7 +147,7 @@ support -- it is why no application repo or manifest here ever defines a
 
 ```text
 name: http                          port: 8000  protocol: HTTP   (no hostname restriction)
-name: english-core-speaking-https   port: 8443  protocol: HTTPS  hostname: english-core-speaking.cleanbrain.me
+name: english-core-speaking-https   port: 8443  protocol: HTTPS  hostname: english-core-speaking.education.cleanbrain.me  (migrated from english-core-speaking.cleanbrain.me 2026-09-13, see "education.cleanbrain.me subdomain namespace" below)
 name: entrance-https                port: 8443  protocol: HTTPS  hostname: cleanbrain.me
 name: kioti-crm-discount-https       port: 8443  protocol: HTTPS  hostname: crm-discount.kioti.cleanbrain.me  (added 2026-09-09, see discrepancy note below)
 name: relayhub-java-https            port: 8443  protocol: HTTPS  hostname: relayhub-java.developer.cleanbrain.me  (added 2026-09-11 via kubectl patch, see "relayhub-java" below)
@@ -201,7 +201,7 @@ For `english-core-speaking`:
 
 ```text
 Hostname:
-  english-core-speaking.cleanbrain.me
+  english-core-speaking.education.cleanbrain.me
 
 TLS Secret:
   cleanbrain-me-english-core-speaking-tls
@@ -265,7 +265,7 @@ spec:
       allowedRoutes:
         namespaces: { from: All }
     - name: english-core-speaking-https
-      hostname: english-core-speaking.cleanbrain.me
+      hostname: english-core-speaking.education.cleanbrain.me
       port: 8443
       protocol: HTTPS
       tls:
@@ -302,7 +302,7 @@ spec:
         namespaces:
           from: All
     - name: english-core-speaking-https
-      hostname: english-core-speaking.cleanbrain.me
+      hostname: english-core-speaking.education.cleanbrain.me
       port: 8443
       protocol: HTTPS
       tls:
@@ -423,7 +423,7 @@ Hetzner public IP
 Current application hostnames:
 
 ```text
-english-core-speaking.cleanbrain.me
+english-core-speaking.education.cleanbrain.me
 crm-discount.kioti.cleanbrain.me
 relayhub-java.developer.cleanbrain.me
 developer.cleanbrain.me
@@ -463,6 +463,18 @@ further DNS changes:
 ```text
 *.kioti.cleanbrain.me   A   <Hetzner public IP>   (Proxy: DNS Only)
 ```
+
+`education.cleanbrain.me` is a dedicated subdomain namespace for services
+aimed at learners (see "Naming conventions" below), covered by a wildcard
+CNAME record added 2026-09-13:
+
+```text
+*.education.cleanbrain.me   CNAME   cleanbrain.me   (Proxy: DNS Only)
+```
+
+`english-core-speaking.education.cleanbrain.me` is the first hostname
+under it, migrated off the bare `english-core-speaking.cleanbrain.me`
+hostname the service launched with.
 
 `visitor-counter.cleanbrain.me` needs its own single, non-wildcard A record
 pointing at the Hetzner public IP (same reasoning as
@@ -520,7 +532,7 @@ unless there is a specific reason to use them.
 `kioti.cleanbrain.me` is not a Kubernetes namespace -- it is a DNS-level
 grouping for KIOTI-related test/demo services, kept separate from the bare
 `cleanbrain.me` hostnames used by general personal projects
-(`english-core-speaking.cleanbrain.me`). Each such service still gets its
+(`cleanbrain.me`, `developer.cleanbrain.me`). Each such service still gets its
 own Kubernetes namespace following the normal `cleanbrain-me-<service-name>`
 rule (e.g. `cleanbrain-me-kioti-crm-discount`) and its own `HTTPRoute`
 attached to the one shared Gateway -- only the hostname sits under
@@ -565,6 +577,50 @@ itself. Each of the two "roles" for this name still gets its own ordinary
 (`cleanbrain-me-developer` / `developer-https`, and
 `cleanbrain-me-relayhub-java` / `relayhub-java-https`), exactly like every
 other hostname on this Gateway.
+
+### `education.cleanbrain.me` subdomain namespace
+
+Introduced 2026-09-13 as the destination for `english-core-speaking`,
+migrated off the bare `english-core-speaking.cleanbrain.me` hostname it
+used at launch. Same pattern as `kioti.cleanbrain.me`: a DNS-level grouping
+(not a Kubernetes namespace) for services aimed at learners rather than at
+demonstrating engineering work, covered by a wildcard Cloudflare DNS record
+so future `*.education.cleanbrain.me` services need no further DNS change:
+
+```text
+*.education.cleanbrain.me   CNAME   cleanbrain.me   (Proxy: DNS Only)
+```
+
+Wildcard DNS coverage does **not** mean the Gateway is automatically
+covered too -- same caveat as `kioti.cleanbrain.me`: each hostname under
+`*.education.cleanbrain.me` still needs its own listener patched onto the
+shared Gateway before it gets a real certificate (see "Adding a new
+hostname to the shared Gateway" above), and each service still gets its
+own ordinary `cleanbrain-me-<service-name>` namespace and `HTTPRoute`.
+
+The `english-core-speaking` migration itself required, in order:
+1. The `*.education.cleanbrain.me` DNS record above (already created).
+2. Patching the existing `english-core-speaking-https` listener's
+   `hostname` field on the live Gateway (not tracked in this repo -- see
+   "Gateway" above) from `english-core-speaking.cleanbrain.me` to
+   `english-core-speaking.education.cleanbrain.me`. The listener `name`
+   and `tls.certificateRefs` Secret name stay the same; cert-manager's
+   gateway-shim reissues the `cleanbrain-me-english-core-speaking-tls`
+   Certificate for the new hostname automatically once the listener
+   hostname changes.
+3. Updating the real (non-`.example.`) `Secret/app-secrets` in
+   `cleanbrain-me-english-core-speaking` -- `GOOGLE_CALLBACK_URL` and
+   `FRONTEND_ORIGIN` -- to the new hostname.
+4. Updating the Authorized redirect URI on the Google OAuth client to
+   match the new `GOOGLE_CALLBACK_URL` (see "english-core-speaking" >
+   "Google OAuth" above).
+5. Updating the real `Secret/app-secrets` in `cleanbrain-me-visitor-counter`
+   (`ALLOWED_ORIGINS`) so the visitor counter's CORS check still accepts
+   the frontend's new origin.
+
+Steps 2-5 touch the live cluster/OAuth console and are **not done by
+editing files in this repo** -- see `.example.yaml` files for the
+already-updated template values.
 
 ---
 
@@ -671,7 +727,7 @@ Namespace:
   cleanbrain-me-english-core-speaking
 
 Hostname:
-  english-core-speaking.cleanbrain.me
+  english-core-speaking.education.cleanbrain.me
 ```
 
 Application components:
@@ -1704,8 +1760,14 @@ No external third-party credentials -- this app has no such integration.
 Google Cloud Console must contain the production redirect URI:
 
 ```text
-https://english-core-speaking.cleanbrain.me/api/auth/google/callback
+https://english-core-speaking.education.cleanbrain.me/api/auth/google/callback
 ```
+
+**Migration note (2026-09-13):** the hostname changed from
+`english-core-speaking.cleanbrain.me`. The Authorized redirect URI on the
+Google OAuth client must be updated to the new URL above -- the old URI can
+be removed once the new one is confirmed working, or kept temporarily during
+cutover if a rollback window is wanted.
 
 The configured application value must exactly match the authorized redirect URI.
 
@@ -2000,18 +2062,18 @@ curl http://localhost:3000/api/health
 
 ```bash
 curl -I \
-  https://english-core-speaking.cleanbrain.me
+  https://english-core-speaking.education.cleanbrain.me
 ```
 
 ```bash
 curl \
-  https://english-core-speaking.cleanbrain.me/api/health
+  https://english-core-speaking.education.cleanbrain.me/api/health
 ```
 
 Then verify the service from a real browser:
 
 ```text
-https://english-core-speaking.cleanbrain.me
+https://english-core-speaking.education.cleanbrain.me
 ```
 
 Test at least:

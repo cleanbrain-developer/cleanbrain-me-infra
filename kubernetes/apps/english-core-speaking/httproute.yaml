@@ -14,7 +14,7 @@ spec:
     - name: cleanbrain-me-gateway
       namespace: cleanbrain-me-system
   hostnames:
-    - english-core-speaking.cleanbrain.me
+    - english-core-speaking.education.cleanbrain.me
   rules:
     # /api first: HTTPRoute path matching is longest-prefix-wins regardless
     # of rule order, but listing the more specific match first keeps intent
