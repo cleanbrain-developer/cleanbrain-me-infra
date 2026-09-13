@@ -13,7 +13,7 @@ Current application repositories:
 - [`cleanbrain-me-entrance`](https://github.com/cleanbrain-developer/cleanbrain-me-entrance)
 - [`relayhub-java`](https://github.com/cleanbrain-developer/relayhub-java) + [`relayhub-demo-systems`](https://github.com/cleanbrain-developer/relayhub-demo-systems) (two repositories, one namespace/deployment — see "relayhub-java" below)
 - [`cleanbrain-me-developer`](https://github.com/cleanbrain-developer/cleanbrain-me-developer) (see "developer" below)
-- [`cleanbrain-me-visitor-counter`](https://github.com/cleanbrain-developer/cleanbrain-me-visitor-counter) (shared anonymous "today visitor count" API called by all 5 frontends above -- see "visitor-counter" below)
+- [`cleanbrain-me-visitor-counter`](https://github.com/cleanbrain-developer/cleanbrain-me-visitor-counter) (shared anonymous "today" and "all-time" visitor count API called by all 5 frontends above -- see "visitor-counter" below)
 
 ---
 
@@ -697,7 +697,7 @@ kubernetes/
     │   ├── service.yaml
     │   └── httproute.yaml
     │
-    └── visitor-counter/         # shared anonymous "today visitor count" API, called by all 5 frontends
+    └── visitor-counter/         # shared anonymous "today" and "all-time" visitor count API, called by all 5 frontends
         ├── secret.example.yaml
         ├── rbac.yaml
         ├── pvc.yaml
@@ -1455,8 +1455,11 @@ standing up a separate DB per service on a 2 vCPU / 4 GB host, one small
 shared service hosts the counter for all five.
 
 A "visitor" is the distinct `(IP, User-Agent)` pair seen for a given
-service on a given calendar day, evaluated in the *caller's* timezone (sent
-as a `tz` query param), not the server's. IPs are never stored raw --
+service -- "today" scopes that to a given calendar day, evaluated in the
+*caller's* timezone (sent as a `tz` query param), not the server's;
+"all-time" never resets and is tracked in a separate table that is never
+purged (unlike the short-lived raw log `visits` uses for "today" -- see the
+application repo's README for the schema). IPs are never stored raw --
 only an HMAC-SHA256 hash keyed by `VISITOR_IP_HASH_SALT`.
 
 ### Runtime
