@@ -1,0 +1,45 @@
+# Cluster-wide HTTP -> HTTPS redirect, attached only to the shared
+# Gateway's plain-HTTP "http" listener (port 8000) -- never to any of the
+# per-hostname HTTPS listeners. Unlike every other HTTPRoute in this repo,
+# this one deliberately has no `hostnames` field, so it matches every
+# hostname the "http" listener accepts (it has no hostname restriction of
+# its own -- see README.md "Networking" > "Gateway"), covering all current
+# and future apps with a single resource instead of duplicating a redirect
+# rule in each app's own HTTPRoute.
+#
+# Why this exists: a real visitor reached cleanbrain.me over plain HTTP
+# (address bar showed "Not Secure"), so the page's Origin became
+# "http://cleanbrain.me" instead of "https://cleanbrain.me" -- which does
+# not match ALLOWED_ORIGINS on cleanbrain-me-visitor-counter (an exact,
+# scheme-sensitive match), so every visitor-counter fetch from that page
+# was silently rejected by CORS. Nothing in this cluster previously forced
+# an upgrade to HTTPS; any app is vulnerable to the same class of failure
+# for any browser feature that is scheme-sensitive (CORS, mixed content,
+# Secure cookies), not just this one.
+#
+# Cert-manager's ACME HTTP-01 challenge also uses this "http" listener (via
+# its own temporary Ingress, per README.md "ACME HTTP-01 implementation")
+# to serve `/.well-known/acme-challenge/<token>`. That is a separate,
+# far more specific route than this catch-all "/" redirect, and Traefik
+# resolves overlapping routes by specificity regardless of whether they
+# came from an Ingress or a Gateway API HTTPRoute, so the challenge path
+# is expected to keep resolving directly instead of being redirected.
+# Verify this holds the next time a certificate renews (or force one) --
+# if a renewal ever fails after this change, that assumption is where to
+# look first.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+  namespace: cleanbrain-me-system
+spec:
+  parentRefs:
+    - name: cleanbrain-me-gateway
+      namespace: cleanbrain-me-system
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

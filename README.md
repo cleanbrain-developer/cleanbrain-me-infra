@@ -171,6 +171,33 @@ had ever been added for it).
 
 The shared Gateway allows application routes from other namespaces.
 
+### HTTP -> HTTPS redirect
+
+`kubernetes/apps/gateway/httproute-http-redirect.yaml` is a single
+cluster-wide `HTTPRoute` attached only to the Gateway's plain-HTTP `http`
+listener (`sectionName: http`), with no `hostnames` field so it matches
+every hostname that listener accepts. It redirects every plain-HTTP
+request to HTTPS (301) and covers all current and future apps -- unlike
+every other `HTTPRoute` in this repo, it is not scoped to one application.
+
+This exists because nothing previously forced that upgrade: a real visitor
+reached `cleanbrain.me` over plain HTTP, so the page's `Origin` became
+`http://cleanbrain.me` instead of `https://cleanbrain.me`, which did not
+match `cleanbrain-me-visitor-counter`'s `ALLOWED_ORIGINS` (an exact,
+scheme-sensitive match) -- every visitor-counter fetch from that page was
+silently rejected by CORS with no visible error. The same class of failure
+can hit any scheme-sensitive browser feature (CORS, mixed content, Secure
+cookies) in any app, not just that one call site.
+
+Cert-manager's ACME HTTP-01 challenge also uses this same `http` listener
+(via its own temporary Ingress, see "ACME HTTP-01 implementation" below) to
+serve `/.well-known/acme-challenge/<token>`. That path is far more specific
+than this redirect's catch-all `/` match, and Traefik resolves overlapping
+routes by specificity regardless of whether they came from an Ingress or a
+Gateway API `HTTPRoute`, so challenges are expected to keep resolving
+directly instead of being redirected -- verify this the next time a
+certificate renews (or force one) if this is ever in doubt.
+
 ---
 
 ## TLS
@@ -697,13 +724,16 @@ kubernetes/
     │   ├── service.yaml
     │   └── httproute.yaml
     │
-    └── visitor-counter/         # shared anonymous "today" and "all-time" visitor count API, called by all 5 frontends
-        ├── secret.example.yaml
-        ├── rbac.yaml
-        ├── pvc.yaml
-        ├── deployment.yaml
-        ├── service.yaml
-        └── httproute.yaml
+    ├── visitor-counter/         # shared anonymous "today" and "all-time" visitor count API, called by all 5 frontends
+    │   ├── secret.example.yaml
+    │   ├── rbac.yaml
+    │   ├── pvc.yaml
+    │   ├── deployment.yaml
+    │   ├── service.yaml
+    │   └── httproute.yaml
+    │
+    └── gateway/                 # not an application -- cluster-wide Gateway-attached resources
+        └── httproute-http-redirect.yaml
 ```
 
 Plain Kubernetes manifests are used initially.
