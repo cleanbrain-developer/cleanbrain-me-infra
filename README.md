@@ -198,6 +198,20 @@ Gateway API `HTTPRoute`, so challenges are expected to keep resolving
 directly instead of being redirected -- verify this the next time a
 certificate renews (or force one) if this is ever in doubt.
 
+**This redirect only takes effect because every application `HTTPRoute`
+also pins `parentRefs[].sectionName` to its own `<app>-https` listener.**
+The first attempt at this redirect (without that pin) had no effect --
+`curl -I http://cleanbrain.me` kept returning `200 OK` from `entrance`
+instead of a `301`. The cause: an `HTTPRoute` with no `sectionName` binds
+to *every* listener whose `hostnames` it matches, including the plain
+`http` one, and Gateway API's routing precedence prefers a route with an
+explicit `hostnames` match (any single application's route) over one with
+none (this redirect route) when both attach to the same listener --
+`entrance`'s own route was silently winning on port 8000 as well as 8443.
+Every application `HTTPRoute` in this repo now sets `sectionName:
+<app>-https` for exactly this reason; a new application's `HTTPRoute` must
+do the same, or it will keep serving over HTTP.
+
 ---
 
 ## TLS

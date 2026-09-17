@@ -15,6 +15,11 @@ spec:
   parentRefs:
     - name: cleanbrain-me-gateway
       namespace: cleanbrain-me-system
+      # Binds only to the HTTPS listener -- see README.md "HTTP -> HTTPS
+      # redirect" for why (without this, an explicit hostname match here
+      # would outrank httproute-http-redirect.yaml's wildcard route on the
+      # plain-HTTP listener and this app would keep serving over HTTP).
+      sectionName: relayhub-java-https
   hostnames:
     - relayhub-java.developer.cleanbrain.me
   rules:

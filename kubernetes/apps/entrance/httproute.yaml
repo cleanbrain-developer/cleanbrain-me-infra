@@ -20,6 +20,14 @@ spec:
   parentRefs:
     - name: cleanbrain-me-gateway
       namespace: cleanbrain-me-system
+      # Binds only to the HTTPS listener -- without this, this route would
+      # also implicitly attach to the plain-HTTP "http" listener (it has no
+      # hostname restriction of its own) and, because an explicit hostname
+      # match outranks the wildcard httproute-http-redirect.yaml, would
+      # keep serving this app over HTTP directly instead of letting that
+      # catch-all route redirect it to HTTPS. See README.md "HTTP -> HTTPS
+      # redirect".
+      sectionName: entrance-https
   hostnames:
     - cleanbrain.me
   rules:
